@@ -1,0 +1,5 @@
+
+.env/*
+
+# Private uploaded resume files
+storage/resumes/*

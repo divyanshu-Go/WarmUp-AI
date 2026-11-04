@@ -1,0 +1,142 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+
+  --background: #ffffff;
+  --surface: #ffffff;
+  --surface-raised: #fff5f1;
+
+  --foreground: #211916;
+  --muted: #6b625e;
+  --border: #d7ceca;
+
+  --primary: #d94b2d;
+  --primary-hover: #c83d24;
+  --secondary: #fbe5de;
+
+  --content-width: 46rem;
+  --header-height: 3.75rem;
+  --page-gutter: clamp(1rem, 4vw, 2.5rem);
+  --ui-space-section: clamp(2.5rem, 6vw, 4rem);
+
+  --border-width: 2px;
+  --radius-small: 0.625rem;
+  --radius-control: 0.875rem;
+  --radius-card: 1.375rem;
+  --radius-large: 1.75rem;
+
+  --ui-space-card: clamp(1rem, 3vw, 1.5rem);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+
+  --radius-sm: var(--radius-small);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-card);
+  --radius-xl: var(--radius-card);
+  --radius-2xl: var(--radius-large);
+
+  --font-sans: var(--font-google-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-google-sans), sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+[class~="border"] {
+  border-width: var(--border-width);
+}
+
+[class~="border-b"] {
+  border-bottom-width: var(--border-width);
+}
+
+[class~="border-t"] {
+  border-top-width: var(--border-width);
+}
+
+[class~="border-l"] {
+  border-left-width: var(--border-width);
+}
+
+[class~="border-r"] {
+  border-right-width: var(--border-width);
+}
+
+::selection {
+  background: var(--secondary);
+  color: var(--foreground);
+}
+
+.flow-enter {
+  animation: flow-enter 280ms ease-out both;
+}
+
+.progress-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    var(--primary) 0%,
+    #f0785d 48%,
+    var(--primary) 100%
+  );
+  background-size: 200% 100%;
+  animation: progress-shimmer 1.8s linear infinite;
+}
+
+@keyframes flow-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes progress-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-enter,
+  .progress-shimmer {
+    animation: none;
+  }
+}
