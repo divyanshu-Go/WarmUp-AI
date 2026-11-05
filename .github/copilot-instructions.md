@@ -8,8 +8,9 @@ WarmUp helps people prepare for interviews using their resumes. The Next.js fron
 
 - Use a light interface: white backgrounds and surfaces, dark readable text, and reddish-orange primary actions.
 - Use Google Sans as the primary interface font.
-- Keep the layout compact and clear. Prefer bold, visible borders, slightly rounded controls, and concise copy.
-- Reuse the theme variables in `frontend/app/globals.css`; avoid introducing one-off colors, spacing, or radii without a clear need.
+- Keep the UI simple, compact, and structured, with concise copy and no decorative elements that do not help the user.
+- Use the established tablet style as the default for cards, panels, and buttons: rounded rectangular white surfaces, bold dark borders, and reddish-orange accent/shadows.
+- Keep controls and cards bold and slightly rounded. Reuse the color, spacing, border, radius, and shadow tokens in `frontend/app/globals.css` instead of adding one-off values.
 - Keep focus states, errors, success states, and reduced-motion behavior legible and usable.
 
 ## Engineering

@@ -13,19 +13,12 @@ import {
   LockKeyhole,
   Mail,
   ShieldCheck,
-  Sparkles,
   UploadCloud,
   X,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
-const PROCESSING_STEPS = [
-  "Reading your experience",
-  "Finding your strongest skills",
-  "Preparing your interview workspace",
-];
-
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) {
     return `${(bytes / 1024).toFixed(1)} KB`;
@@ -35,21 +28,26 @@ function formatFileSize(bytes) {
 }
 
 export default function Home() {
-  const { user, login } = useAuth();
+  const { user, login, isLoading: authLoading } = useAuth();
   const fileInputRef = useRef(null);
+  const uploadInProgressRef = useRef(false);
   const [resumeFile, setResumeFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [resumeError, setResumeError] = useState("");
   const [uploadedResume, setUploadedResume] = useState(null);
   const [flowStage, setFlowStage] = useState("upload");
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [processingStep, setProcessingStep] = useState(0);
+  const [uploadStage, setUploadStage] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [authStep, setAuthStep] = useState("email");
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sendingOTP, setSendingOTP] = useState(false);
+  const [verifyingOTP, setVerifyingOTP] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
   const [claimError, setClaimError] = useState("");
 
   useEffect(() => {
@@ -57,25 +55,20 @@ export default function Home() {
 
     let progress = 50;
     const timer = window.setInterval(() => {
-      progress = Math.min(progress + 10, 100);
+      progress = Math.min(progress + 5, 100);
       setUploadProgress(progress);
-      setProcessingStep(
-        Math.min(
-          Math.floor((progress - 50) / (50 / PROCESSING_STEPS.length)),
-          PROCESSING_STEPS.length - 1
-        )
-      );
 
       if (progress === 100) {
         window.clearInterval(timer);
         setFlowStage("complete");
       }
-    }, 420);
+    }, 700);
 
     return () => window.clearInterval(timer);
   }, [flowStage]);
 
   function selectResume(file) {
+    if (authLoading || uploadInProgressRef.current) return;
     setResumeError("");
     if (!file) return;
 
@@ -94,6 +87,7 @@ export default function Home() {
     }
 
     setResumeFile(file);
+    uploadResume(file);
   }
 
   function handleResumeChange(event) {
@@ -109,6 +103,8 @@ export default function Home() {
 
   async function beginProcessing() {
     setClaimError("");
+    setUploadProgress(50);
+    setUploadStage("Finishing setup");
     setFlowStage("processing");
   }
 
@@ -167,32 +163,51 @@ export default function Home() {
     await beginProcessing();
   }
 
-  async function uploadResume() {
-    if (!resumeFile || flowStage !== "upload") return;
+  async function uploadResume(file = resumeFile) {
+    if (!file || flowStage !== "upload" || uploadInProgressRef.current) return;
 
+    uploadInProgressRef.current = true;
     setFlowStage("uploading");
     setUploadProgress(0);
+    setUploadStage("Uploading resume");
     setResumeError("");
     setUploadedResume(null);
 
     const formData = new FormData();
-    formData.append("file", resumeFile);
+    formData.append("file", file);
 
     try {
       const data = await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
+        let extractionTimer;
+
+        function stopExtractionTimer() {
+          if (extractionTimer) {
+            window.clearInterval(extractionTimer);
+          }
+        }
+
         xhr.open("POST", `${API_URL}/api/resumes/upload`);
         xhr.withCredentials = true;
 
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable) {
             setUploadProgress(
-              Math.min(46, Math.round((event.loaded / event.total) * 46))
+              Math.min(45, Math.round((event.loaded / event.total) * 45))
             );
           }
         };
 
+        xhr.upload.onload = () => {
+          setUploadStage("Reading resume and finding email");
+          setUploadProgress(46);
+          extractionTimer = window.setInterval(() => {
+            setUploadProgress((progress) => Math.min(progress + 1, 49));
+          }, 800);
+        };
+
         xhr.onload = () => {
+          stopExtractionTimer();
           let responseData = {};
           try {
             responseData = JSON.parse(xhr.responseText);
@@ -215,24 +230,38 @@ export default function Home() {
           resolve(responseData);
         };
 
-        xhr.onerror = () => reject(new Error("Unable to connect to the server."));
-        xhr.onabort = () => reject(new Error("Resume upload was cancelled."));
+        xhr.onerror = () => {
+          stopExtractionTimer();
+          reject(new Error("Unable to connect to the server."));
+        };
+        xhr.onabort = () => {
+          stopExtractionTimer();
+          reject(new Error("Resume upload was cancelled."));
+        };
         xhr.send(formData);
       });
 
       setUploadedResume(data);
       setEmail(data.candidate_email || "");
       setUploadProgress(50);
+      setUploadStage(data.candidate_email ? "Email found" : "Resume read");
 
       if (user) {
         await beginProcessing();
-      } else {
+      } else if (data.candidate_email) {
         setFlowStage("confirm");
+      } else {
+        setAuthStep("email");
+        setUploadStage("No email found");
+        setFlowStage("authenticate");
       }
     } catch (error) {
       setResumeError(error.message || "Resume upload failed.");
+      setUploadStage("Upload failed");
       setFlowStage("upload");
       setUploadProgress(0);
+    } finally {
+      uploadInProgressRef.current = false;
     }
   }
 
@@ -243,9 +272,11 @@ export default function Home() {
       return;
     }
 
-    setLoading(true);
+    setSendingOTP(true);
     setAuthError("");
     setAuthMessage("");
+    setOtpSent(false);
+    setOtpVerified(false);
 
     try {
       const response = await fetch(`${API_URL}/api/auth/send-otp`, {
@@ -265,11 +296,15 @@ export default function Home() {
       setOtp("");
       setAuthStep("otp");
       setFlowStage("authenticate");
-      setAuthMessage(`A verification code is on its way to ${normalizedEmail}.`);
+      setUploadStage("Enter your code");
+      setOtpSent(true);
+      setAuthMessage("Code sent");
     } catch (error) {
       setAuthError(error.message || "Unable to send a verification code.");
+      setAuthStep("email");
+      setFlowStage("authenticate");
     } finally {
-      setLoading(false);
+      setSendingOTP(false);
     }
   }
 
@@ -280,9 +315,10 @@ export default function Home() {
 
   async function verifyOTP(event) {
     event.preventDefault();
-    setLoading(true);
+    setVerifyingOTP(true);
     setAuthError("");
     setAuthMessage("");
+    setOtpVerified(false);
 
     try {
       const response = await fetch(`${API_URL}/api/auth/verify-otp`, {
@@ -297,11 +333,13 @@ export default function Home() {
         throw new Error(data.detail || "Verification failed. Check the code and try again.");
       }
 
+      setOtpVerified(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
       await finishAuthentication(data.user);
     } catch (error) {
       setAuthError(error.message || "Verification failed.");
     } finally {
-      setLoading(false);
+      setVerifyingOTP(false);
     }
   }
 
@@ -355,9 +393,9 @@ export default function Home() {
         <section
           id="auth"
           aria-label="Resume onboarding"
-          className="flow-enter overflow-hidden rounded-[var(--radius-large)] border-2 border-border bg-surface shadow-[0_20px_60px_rgba(0,0,0,0.32)]"
+          className="flow-enter overflow-hidden rounded-[var(--radius-large)] border-2 border-foreground bg-surface shadow-[3px_3px_0_var(--primary)]"
         >
-          <div className="border-b border-border px-4 py-4 sm:px-6">
+          <div className="border-b border-foreground px-4 py-4 sm:px-6">
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm font-bold">Resume setup</p>
               <span className="flex items-center gap-1.5 text-xs text-muted">
@@ -379,7 +417,7 @@ export default function Home() {
                       <span
                         className={`flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-bold transition ${
                           step.done
-                            ? "border-primary bg-primary text-black"
+                            ? "border-foreground bg-primary text-white"
                             : active
                               ? "border-primary bg-primary/10 text-primary"
                               : "border-border bg-background text-muted"
@@ -414,37 +452,45 @@ export default function Home() {
                   type="file"
                   accept=".pdf,application/pdf"
                   onChange={handleResumeChange}
+                  disabled={authLoading}
                   className="hidden"
                 />
 
                 {!resumeFile ? (
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => {
+                      if (!authLoading) fileInputRef.current?.click();
+                    }}
                     onDragOver={(event) => {
                       event.preventDefault();
                       setIsDragging(true);
                     }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={handleDrop}
-                    className={`flex min-h-48 w-full flex-col items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed px-5 py-7 text-center transition duration-200 ${
+                    disabled={authLoading}
+                    className={`flex min-h-48 w-full flex-col items-center justify-center rounded-[var(--radius-card)] border-2 border-dashed px-5 py-7 text-center transition duration-200 disabled:cursor-wait disabled:opacity-70 ${
                       isDragging
                         ? "border-primary bg-primary/10"
-                        : "border-border bg-background hover:border-primary/60 hover:bg-primary/[0.04]"
+                        : "border-foreground bg-background hover:border-primary hover:bg-primary/[0.04]"
                     }`}
                   >
-                    <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-primary/20 bg-primary/10 text-primary">
+                    <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-[var(--radius-control)] border-2 border-foreground bg-secondary text-primary">
                       <UploadCloud size={26} strokeWidth={1.8} />
                     </span>
-                    <span className="text-sm font-medium">Drop your PDF here, or browse</span>
-                    <span className="mt-2 text-xs text-muted">PDF only</span>
-                    <span className="mt-4 rounded-[var(--radius-control)] border-2 border-primary bg-primary px-4 py-2 text-sm font-bold text-black transition hover:bg-primary-hover">
+                    <span className="text-sm font-medium">
+                      {authLoading ? "Checking your account" : "Drop your PDF here, or browse"}
+                    </span>
+                    <span className="mt-2 text-xs text-muted">
+                      {authLoading ? "Just a moment" : "PDF only · Upload starts immediately"}
+                    </span>
+                    <span className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover">
                       Browse files
                     </span>
                   </button>
                 ) : (
-                  <div className="flex items-center gap-4 rounded-[var(--radius-card)] border-2 border-primary/40 bg-primary/[0.06] p-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <div className="flex items-center gap-4 rounded-[var(--radius-control)] border-2 border-foreground bg-surface p-3 shadow-[2px_2px_0_var(--primary)]">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--radius-control)] border-2 border-foreground bg-secondary text-primary">
                       <FileText size={22} />
                     </span>
                     <span className="min-w-0 flex-1">
@@ -462,88 +508,53 @@ export default function Home() {
                   </div>
                 )}
 
-                {resumeFile && (
-                  <button
-                    type="button"
-                    onClick={uploadResume}
-                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary py-3 text-sm font-bold text-black transition hover:bg-primary-hover"
-                  >
-                    Continue with this resume <ArrowRight size={17} />
-                  </button>
-                )}
               </div>
             )}
 
             {flowStage === "uploading" && (
-              <div className="flow-enter py-7 text-center">
-                <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <Loader2 size={26} className="animate-spin" />
-                </span>
-                <h2 className="mt-5 text-lg font-bold">Reading your resume</h2>
-                <ProgressBar progress={uploadProgress} label="Reading your resume" />
+              <div className="flow-enter flex items-center gap-3 py-2">
+                <Loader2 size={18} className="shrink-0 animate-spin text-primary" />
+                <span className="min-w-0 flex-1 text-sm font-medium">{uploadStage}</span>
+                <span className="max-w-[45%] truncate text-xs text-muted">{resumeFile?.name}</span>
               </div>
             )}
 
             {flowStage === "confirm" && (
-              <div className="flow-enter py-2 text-center">
-                <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-green-500/10 text-green-700">
-                  <Mail size={25} />
-                </span>
-                <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-                  Resume uploaded · 50%
-                </p>
-                {uploadedResume?.candidate_email ? (
-                  <>
-                    <h2 className="mt-3 text-xl font-bold">Use this email?</h2>
-                    <div className="mx-auto mt-5 flex max-w-md items-center justify-center gap-3 rounded-[var(--radius-control)] border-2 border-border bg-background px-4 py-3">
-                      <Mail size={16} className="shrink-0 text-primary" />
-                      <span className="break-all text-sm font-medium">{uploadedResume.candidate_email}</span>
-                    </div>
-                    <ProgressBar progress={50} label="Waiting for your confirmation" paused />
-                    <div className="mx-auto mt-6 grid max-w-md gap-3 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => requestOTP(uploadedResume.candidate_email)}
-                        disabled={loading}
-                        className="flex items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary px-4 py-3 text-sm font-bold text-black transition hover:bg-primary-hover disabled:opacity-60"
-                      >
-                        Yes, use this email <ArrowRight size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEmail("");
-                          setAuthStep("email");
-                          setAuthError("");
-                          setFlowStage("authenticate");
-                        }}
-                        className="rounded-[var(--radius-control)] border-2 border-border bg-background px-4 py-3 text-sm font-bold transition hover:border-primary/60 hover:bg-surface-raised"
-                      >
-                        No, use another way
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <h2 className="mt-3 text-xl font-bold">No email found</h2>
-                    <ProgressBar progress={50} label="Resume ready" paused />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAuthStep("email");
-                        setFlowStage("authenticate");
-                      }}
-                      className="mt-6 rounded-[var(--radius-control)] border-2 border-primary bg-primary px-5 py-3 text-sm font-bold text-black transition hover:bg-primary-hover"
-                    >
-                      Continue to sign in <ArrowRight size={16} className="ml-1 inline" />
-                    </button>
-                  </>
-                )}
+              <div className="flow-enter">
+                <div className="flex items-center gap-3 rounded-[var(--radius-control)] border-2 border-foreground bg-background p-3 shadow-[2px_2px_0_var(--primary)]">
+                  <Mail size={18} className="shrink-0 text-primary" />
+                  <span className="min-w-0 flex-1 break-all text-sm font-medium">{uploadedResume?.candidate_email}</span>
+                  <span className="shrink-0 text-xs text-muted">Use this email?</span>
+                  <button
+                    type="button"
+                    aria-label="Yes, use this email"
+                    title="Use this email"
+                    onClick={() => requestOTP(uploadedResume.candidate_email)}
+                    disabled={sendingOTP || loading}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] border-2 border-green-800 bg-green-100 text-green-800 transition hover:bg-green-200 disabled:opacity-50"
+                  >
+                    {sendingOTP ? <Loader2 size={16} className="animate-spin" /> : <Check size={19} />}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="No, use another email or Google"
+                    title="Use another email or Google"
+                    onClick={() => {
+                      setEmail("");
+                      setAuthStep("email");
+                      setAuthError("");
+                      setFlowStage("authenticate");
+                    }}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] border-2 border-red-800 bg-red-100 text-red-800 transition hover:bg-red-200"
+                  >
+                    <X size={19} />
+                  </button>
+                </div>
               </div>
             )}
 
             {flowStage === "authenticate" && (
-              <div className="flow-enter mx-auto max-w-md py-1">
+              <div className="flow-enter mx-auto max-w-xl py-1">
                 {claimError ? (
                   <div className="text-center">
                     <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-700">
@@ -555,82 +566,30 @@ export default function Home() {
                       type="button"
                       onClick={claimResume}
                       disabled={loading}
-                      className="mt-5 flex w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary py-3 text-sm font-bold text-black disabled:opacity-60"
+                      className="mt-5 flex w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary py-3 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] disabled:opacity-60"
                     >
                       {loading ? <Loader2 size={17} className="animate-spin" /> : <>Retry connection <ArrowRight size={16} /></>}
                     </button>
                   </div>
                 ) : (
                   <>
-                    <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                      {authStep === "otp" ? <ShieldCheck size={23} /> : <Mail size={23} />}
-                    </span>
-                    <h2 className="mt-5 text-xl font-bold">
-                      {authStep === "otp" ? "Check your inbox" : "Choose how to continue"}
-                    </h2>
-                    {authStep === "otp" && (
-                      <p className="mt-2 break-all text-sm text-muted">{email}</p>
+                    {uploadedResume?.candidate_email && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthError("");
+                          setOtpSent(false);
+                          setOtpVerified(false);
+                          setFlowStage("confirm");
+                        }}
+                        className="mb-3 flex items-center gap-1 text-xs font-normal text-muted transition hover:text-foreground"
+                      >
+                        <ArrowLeft size={13} /> Use resume email
+                      </button>
                     )}
-
-                    {authStep === "email" ? (
-                      <>
-                        <form onSubmit={handleEmailSubmit} className="mt-6">
-                          <label htmlFor="email" className="mb-2 block text-sm font-medium">
-                            Email address
-                          </label>
-                          <input
-                            id="email"
-                            type="email"
-                            required
-                            autoComplete="email"
-                            value={email}
-                            onChange={(event) => setEmail(event.target.value)}
-                            placeholder="you@example.com"
-                            className="w-full rounded-[var(--radius-control)] border-2 border-border bg-background px-4 py-3 text-sm outline-none transition placeholder:text-muted/60 focus:border-primary"
-                          />
-                          <button
-                            type="submit"
-                            disabled={loading || !email.trim()}
-                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary py-3 text-sm font-bold text-black transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {loading ? <Loader2 size={17} className="animate-spin" /> : <>Send a code <ArrowRight size={16} /></>}
-                          </button>
-                        </form>
-
-                        <div className="my-5 flex items-center gap-3">
-                          <span className="h-px flex-1 bg-border" />
-                          <span className="text-[11px] font-medium text-muted">OR</span>
-                          <span className="h-px flex-1 bg-border" />
-                        </div>
-                        <div className="flex justify-center">
-                          <GoogleLogin
-                            onSuccess={handleGoogleSuccess}
-                            onError={() => setAuthError("Google sign-in was unsuccessful.")}
-                            theme="outline"
-                            size="large"
-                            text="continue_with"
-                            shape="rectangular"
-                          />
-                        </div>
-
-                        {uploadedResume?.candidate_email && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setAuthError("");
-                              setFlowStage("confirm");
-                            }}
-                            className="mt-5 flex w-full items-center justify-center gap-2 text-sm text-muted transition hover:text-foreground"
-                          >
-                            <ArrowLeft size={15} /> Use the email from my resume
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <form onSubmit={verifyOTP} className="mt-6">
-                        <label htmlFor="otp" className="mb-2 block text-sm font-medium">
-                          Verification code
-                        </label>
+                    {authStep === "otp" && (
+                      <form onSubmit={verifyOTP} className="mb-3 flex items-center gap-2">
+                        <label htmlFor="otp" className="sr-only">6-digit verification code</label>
                         <input
                           id="otp"
                           type="text"
@@ -640,59 +599,97 @@ export default function Home() {
                           required
                           value={otp}
                           onChange={(event) => setOtp(event.target.value.replace(/\D/g, ""))}
-                          placeholder="000000"
-                          className="w-full rounded-[var(--radius-control)] border-2 border-border bg-background px-4 py-3.5 text-center text-2xl tracking-[0.5em] outline-none transition placeholder:text-muted/40 focus:border-primary"
+                          placeholder="6-digit code"
+                          aria-label={`Verification code sent to ${email}`}
+                          className="w-36 shrink-0 rounded-[var(--radius-control)] border-2 border-foreground bg-background px-2 py-2 text-center text-sm font-bold tracking-[0.2em] outline-none transition placeholder:tracking-normal placeholder:text-xs placeholder:font-normal placeholder:text-muted/60 focus:border-primary sm:w-40"
                         />
                         <button
                           type="submit"
-                          disabled={loading || otp.length !== 6}
-                          className="mt-4 flex w-full items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary py-3 text-sm font-bold text-black transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={verifyingOTP || loading || otpVerified || otp.length !== 6}
+                          aria-label={otpVerified ? "Code verified" : "Verify code"}
+                          className={`flex h-10 w-28 shrink-0 items-center justify-center rounded-[var(--radius-control)] border-2 border-foreground text-sm font-bold shadow-[2px_2px_0_var(--primary)] transition disabled:cursor-not-allowed disabled:opacity-100 ${
+                            otpVerified
+                              ? "bg-green-100 text-green-800"
+                              : "bg-primary text-white hover:bg-primary-hover disabled:opacity-50"
+                          }`}
                         >
-                          {loading ? <Loader2 size={17} className="animate-spin" /> : <>Verify and continue <ArrowRight size={16} /></>}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthStep("email");
-                            setOtp("");
-                            setAuthError("");
-                            setAuthMessage("");
-                          }}
-                          className="mt-4 flex w-full items-center justify-center gap-2 text-sm text-muted transition hover:text-foreground"
-                        >
-                          <ArrowLeft size={15} /> Use a different email
+                          {otpVerified ? (
+                            <Check size={19} className="success-check" />
+                          ) : verifyingOTP || loading ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : (
+                            "Verify"
+                          )}
                         </button>
                       </form>
                     )}
 
-                    {authMessage && <p className="mt-4 text-center text-sm text-green-700">{authMessage}</p>}
-                    {authError && <p role="alert" className="mt-4 text-center text-sm text-red-700">{authError}</p>}
+                    <div className="flex w-full flex-col items-start gap-3">
+                      <form onSubmit={handleEmailSubmit} className="flex w-full min-w-0 flex-col items-start gap-2 sm:flex-row">
+                        <label htmlFor="email" className="sr-only">Email address</label>
+                        <input
+                          id="email"
+                          type="email"
+                          required
+                          autoComplete="email"
+                          value={email}
+                          onChange={(event) => {
+                            setEmail(event.target.value);
+                            setOtpSent(false);
+                            setOtpVerified(false);
+                            setOtp("");
+                            setAuthMessage("");
+                            if (authStep === "otp") {
+                              setAuthStep("email");
+                            }
+                          }}
+                          placeholder="Email address"
+                          className="w-full min-w-0 flex-1 rounded-[var(--radius-control)] border-2 border-foreground bg-background px-3 py-2 text-xs outline-none transition placeholder:text-muted/60 focus:border-primary sm:text-sm"
+                        />
+                        <button
+                          type="submit"
+                          disabled={sendingOTP || loading || !email.trim()}
+                          aria-label={otpSent ? "Code sent. Resend code" : "Send verification code"}
+                          title={otpSent ? "Code sent — click to resend" : "Send verification code"}
+                          className={`flex h-10 w-24 shrink-0 items-center justify-center rounded-[var(--radius-control)] border-2 border-foreground text-xs font-bold shadow-[2px_2px_0_var(--primary)] transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                            otpSent
+                              ? "bg-green-100 text-green-800"
+                              : "bg-primary text-white hover:bg-primary-hover"
+                          }`}
+                        >
+                          {sendingOTP ? (
+                            <Loader2 size={16} className="animate-spin" />
+                          ) : otpSent ? (
+                            <Check size={19} className="success-check" />
+                          ) : (
+                            "Send code"
+                          )}
+                        </button>
+                      </form>
+                      <div className="flex w-[210px] max-w-full shrink-0 justify-start">
+                        <GoogleLogin
+                          onSuccess={handleGoogleSuccess}
+                          onError={() => setAuthError("Google sign-in was unsuccessful.")}
+                          theme="outline"
+                          size="medium"
+                          text="continue_with"
+                          shape="rectangular"
+                          width={210}
+                        />
+                      </div>
+                    </div>
+
+                    {authMessage && <p className="mt-2 text-xs text-green-700">{authMessage}</p>}
+                    {authError && <p role="alert" className="mt-2 text-xs text-red-700">{authError}</p>}
                   </>
                 )}
               </div>
             )}
 
             {flowStage === "processing" && (
-              <div className="flow-enter py-7 text-center">
-                <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <Sparkles size={25} className="animate-pulse" />
-                </span>
-                <h2 className="mt-5 text-lg font-bold">Preparing your interview</h2>
-                <ProgressBar progress={uploadProgress} label={PROCESSING_STEPS[processingStep]} />
-                <div className="mx-auto mt-7 max-w-md space-y-3 text-left">
-                  {PROCESSING_STEPS.map((step, index) => {
-                    const complete = index < processingStep;
-                    const active = index === processingStep;
-                    return (
-                      <div key={step} className={`flex items-center gap-3 text-sm ${active ? "text-foreground" : complete ? "text-muted" : "text-muted/55"}`}>
-                        <span className={`flex h-6 w-6 items-center justify-center rounded-full ${complete ? "bg-green-500/10 text-green-700" : active ? "bg-primary/10 text-primary" : "bg-background text-muted/50"}`}>
-                          {complete ? <Check size={13} /> : active ? <Loader2 size={13} className="animate-spin" /> : <span className="text-[10px]">{index + 1}</span>}
-                        </span>
-                        {step}
-                      </div>
-                    );
-                  })}
-                </div>
+              <div className="flow-enter flex items-center gap-3 py-2">
+                <Loader2 size={18} className="shrink-0 animate-spin text-primary" />
+                <span className="text-sm font-medium">Finishing setup</span>
               </div>
             )}
 
@@ -703,33 +700,42 @@ export default function Home() {
                 </span>
                 <p className="mt-5 text-xs font-semibold uppercase tracking-[0.16em] text-green-700">You&apos;re all set</p>
                 <h2 className="mt-2 text-2xl font-semibold">Your resume is ready</h2>
-                <div className="mx-auto mt-5 flex max-w-md items-center gap-3 rounded-[var(--radius-control)] border-2 border-border bg-background p-3 text-left">
+                <div className="mx-auto mt-5 flex max-w-md items-center gap-3 rounded-[var(--radius-control)] border-2 border-foreground bg-background p-3 text-left shadow-[2px_2px_0_var(--primary)]">
                   <FileText size={18} className="shrink-0 text-primary" />
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{uploadedResume?.filename || resumeFile?.name}</span>
                   <CheckCircle2 size={17} className="shrink-0 text-green-700" />
                 </div>
                 <Link
                   href="/dashboard"
-                  className="mx-auto mt-5 flex max-w-md items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-primary bg-primary py-3 text-sm font-bold text-black transition hover:bg-primary-hover"
+                  className="mx-auto mt-5 flex max-w-md items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary py-3 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover"
                 >
-                  Start your interview <ArrowRight size={17} />
+                  Continue to dashboard <ArrowRight size={17} />
                 </Link>
               </div>
             )}
 
-            {flowStage === "authenticate" && (
+            {["uploading", "confirm", "authenticate", "processing"].includes(flowStage) && (
               <ProgressBar
                 progress={uploadProgress}
-                label="Resume processing paused"
-                paused
-                compact
+                label={uploadStage}
+                paused={flowStage === "confirm" || flowStage === "authenticate"}
               />
             )}
 
             {resumeError && (
-              <p role="alert" className="mt-4 text-center text-sm text-red-700">
-                {resumeError}
-              </p>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p role="alert" className="text-sm text-red-700">{resumeError}</p>
+                {flowStage === "upload" && resumeFile && (
+                  <button
+                    type="button"
+                    onClick={() => uploadResume(resumeFile)}
+                    disabled={uploadInProgressRef.current}
+                    className="rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-3 py-2 text-xs font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover disabled:opacity-50"
+                  >
+                    Retry upload
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </section>
@@ -739,17 +745,15 @@ export default function Home() {
   );
 }
 
-function ProgressBar({ progress, label, paused = false, compact = false }) {
+function ProgressBar({ progress, label, paused = false }) {
   return (
-    <div className={`${compact ? "mt-6" : "mt-7"} text-left`}>
-      {!compact && (
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <span className="text-xs text-muted">{label}</span>
-          <span className="text-xs font-medium tabular-nums text-primary">{progress}%</span>
-        </div>
-      )}
+    <div className="mt-5 text-left">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-foreground">{label}</span>
+        <span className="text-sm font-medium tabular-nums text-primary">{progress}%</span>
+      </div>
       <div
-        className={`relative overflow-hidden rounded-full bg-surface-raised ${compact ? "h-1" : "h-1.5"}`}
+        className="relative h-5 overflow-hidden rounded-full border-2 border-foreground bg-surface-raised"
         role="progressbar"
         aria-valuenow={progress}
         aria-valuemin={0}
@@ -757,16 +761,10 @@ function ProgressBar({ progress, label, paused = false, compact = false }) {
         aria-label={label || "Resume preparation progress"}
       >
         <div
-          className={`h-full rounded-full bg-primary transition-[width] duration-700 ease-out ${paused ? "" : "progress-shimmer"}`}
+          className={`h-full rounded-full bg-primary transition-[width] duration-1000 ease-out ${paused ? "" : "progress-shimmer"}`}
           style={{ width: `${progress}%` }}
         />
       </div>
-      {compact && (
-        <div className="mt-2 flex justify-between text-[11px] text-muted">
-          <span>{label}</span>
-          <span className="tabular-nums text-primary">{progress}%</span>
-        </div>
-      )}
     </div>
   );
 }
