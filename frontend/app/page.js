@@ -19,6 +19,15 @@ import {
 import { useAuth } from "@/context/AuthContext";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
+
+function rememberResumeId(resumeId) {
+  try {
+    window.localStorage.setItem("warmup_resume_id", resumeId);
+  } catch (error) {
+    console.warn("Unable to remember the uploaded resume in this browser.", error);
+  }
+}
+
 function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) {
     return `${(bytes / 1024).toFixed(1)} KB`;
@@ -144,6 +153,7 @@ export default function Home() {
         ...data,
         claim_token: null,
       }));
+      rememberResumeId(data.id);
       await beginProcessing();
     } catch (error) {
       setClaimError(error.message || "We couldn't connect this resume to your account.");
@@ -247,6 +257,7 @@ export default function Home() {
       setUploadStage(data.candidate_email ? "Email found" : "Resume read");
 
       if (user) {
+        rememberResumeId(data.id);
         await beginProcessing();
       } else if (data.candidate_email) {
         setFlowStage("confirm");

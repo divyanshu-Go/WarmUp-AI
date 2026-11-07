@@ -9,3 +9,4 @@ email-validator
 google-auth[requests]
 python-multipart
 pypdf
+groq

@@ -3,3 +3,9 @@
 
 # Private uploaded resume files
 storage/resumes/*
+
+# Private generated interview audio
+storage/interview_audio/*
+
+# Private uploaded interview answers
+storage/interview_answer_audio/*

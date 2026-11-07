@@ -2,7 +2,9 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowRight } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 export default function DashboardPage() {
@@ -34,8 +36,14 @@ export default function DashboardPage() {
       <section className="mt-6 rounded-[var(--radius-card)] border-2 border-border bg-surface p-[var(--ui-space-card)]">
         <h2 className="text-lg font-bold">Ready when you are.</h2>
         <p className="mt-1 text-sm text-muted">
-          Upload a resume to prepare for your next interview.
+          Start a practice interview using your uploaded resume.
         </p>
+        <Link
+          href="/dashboard/interview"
+          className="mt-4 inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover"
+        >
+          Open interview prototype <ArrowRight size={16} />
+        </Link>
       </section>
     </main>
   );

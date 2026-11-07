@@ -9,6 +9,9 @@ from alembic import context
 from app.core.config import settings
 from app.db.base import Base
 from app.models.email_otp import EmailOTP  # Registers the model
+from app.models.interview import Interview  # Registers the model
+from app.models.interview_answer import InterviewAnswer  # Registers the model
+from app.models.interview_question import InterviewQuestion  # Registers the model
 from app.models.resume import Resume  # Registers the model
 from app.models.user import User  # Registers the model
 from app.models.user_session import UserSession  # Registers the model
