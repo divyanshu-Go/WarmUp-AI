@@ -650,6 +650,27 @@ export default function InterviewPrototypePage() {
             <p className="mt-2 text-xs text-muted">
               Uses your latest uploaded resume text to generate dynamic technical probes.
             </p>
+            <div className="mt-4 flex items-start gap-3">
+              <input
+                id="auto-speak"
+                type="checkbox"
+                checked={autoSpeak}
+                onChange={(event) => setAutoSpeak(event.target.checked)}
+                aria-describedby="auto-speak-description"
+                className="mt-0.5 h-4 w-4 accent-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              />
+              <div>
+                <label
+                  htmlFor="auto-speak"
+                  className="cursor-pointer text-sm font-bold"
+                >
+                  Speak questions automatically
+                </label>
+                <p id="auto-speak-description" className="mt-1 text-xs text-muted">
+                  Turn off to skip generated question audio. Questions stay visible and answers are still recorded.
+                </p>
+              </div>
+            </div>
             <button
               type="submit"
               disabled={!resumeId.trim()}
