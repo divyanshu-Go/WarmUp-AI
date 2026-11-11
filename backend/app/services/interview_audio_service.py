@@ -25,6 +25,7 @@ SUPPORTED_AUDIO_TYPES = {
 
 
 def save_answer_audio(file: UploadFile) -> str:
+    # Validate the browser recording, enforce its size limit, and save it privately.
     extension = Path(file.filename or "").suffix.lower()
     accepted_content_types = SUPPORTED_AUDIO_TYPES.get(extension)
 

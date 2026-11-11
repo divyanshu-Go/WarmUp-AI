@@ -1,3 +1,4 @@
+# app/api/routes/interviews.py
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -24,7 +25,10 @@ from app.services.interview_service import (
     retry_answer_transcription,
     submit_answer as submit_interview_answer,
 )
-from app.services.interview_turn_service import retry_answer_evaluation
+from app.services.interview_turn_service import (
+    complete_interview_after_conclusion,
+    retry_answer_evaluation,
+)
 
 
 router = APIRouter(
@@ -44,6 +48,7 @@ def build_interview_response(
             id=current_question.id,
             sequence_number=current_question.sequence_number,
             kind=current_question.kind,
+            stage=current_question.stage,
             topic=current_question.topic,
             text=current_question.text,
             audio_url=(
@@ -96,6 +101,7 @@ def start_interview(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # The service creates the interview and its first resume-based question.
     interview, first_question = create_interview(
         db=db,
         user_id=user.id,
@@ -158,6 +164,7 @@ def submit_answer(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # The response contains the transcript and the next question, if any.
     answer, interview, next_question = submit_interview_answer(
         db=db,
         user_id=user.id,
@@ -209,6 +216,23 @@ def retry_evaluation(
     return build_answer_response(answer, interview, next_question)
 
 
+@router.post(
+    "/{interview_id}/complete",
+    response_model=InterviewResponse,
+)
+def complete_interview(
+    interview_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    interview, conclusion = complete_interview_after_conclusion(
+        db=db,
+        user_id=user.id,
+        interview_id=interview_id,
+    )
+    return build_interview_response(interview, conclusion)
+
+
 @router.get(
     "/{interview_id}/feedback",
     response_model=InterviewFeedbackResponse,
@@ -218,6 +242,7 @@ def read_interview_feedback(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Keep final feedback private until all interview turns are complete.
     interview, _ = get_interview(
         db=db,
         user_id=user.id,

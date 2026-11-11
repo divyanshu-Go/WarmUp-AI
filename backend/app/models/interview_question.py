@@ -1,3 +1,4 @@
+# models/interview_question.py
 import uuid
 from datetime import datetime
 
@@ -30,8 +31,21 @@ class InterviewQuestion(Base):
             name="ck_interview_questions_sequence_positive",
         ),
         CheckConstraint(
-            "kind IN ('core', 'followup')",
+            "kind IN ('core', 'followup', 'conclusion')",
             name="ck_interview_questions_kind",
+        ),
+        CheckConstraint(
+            "stage IS NULL OR stage IN "
+            "('introduction', 'project', 'skill', 'hr', 'conclusion')",
+            name="ck_interview_questions_stage",
+        ),
+        CheckConstraint(
+            "plan_index IS NULL OR plan_index >= 0",
+            name="ck_interview_questions_plan_index_nonnegative",
+        ),
+        CheckConstraint(
+            "stage_item_index IS NULL OR stage_item_index >= 0",
+            name="ck_interview_questions_stage_item_index_nonnegative",
         ),
     )
 
@@ -51,6 +65,21 @@ class InterviewQuestion(Base):
     sequence_number: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
+    )
+
+    stage: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    plan_index: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    stage_item_index: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
 
     kind: Mapped[str] = mapped_column(

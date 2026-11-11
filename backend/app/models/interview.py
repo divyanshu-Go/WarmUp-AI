@@ -1,3 +1,4 @@
+# models/interview.py
 import uuid
 from datetime import datetime
 from typing import Any
@@ -92,6 +93,11 @@ class Interview(Base):
 
     context_summary: Mapped[str | None] = mapped_column(
         Text,
+        nullable=True,
+    )
+
+    interview_plan: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
         nullable=True,
     )
 

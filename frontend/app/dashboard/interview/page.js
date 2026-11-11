@@ -100,6 +100,7 @@ export default function InterviewPrototypePage() {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(null);
 
+  // Keep the displayed question counts in sync with the next turn from the API.
   function updateInterviewProgress(interviewData, nextQuestion, status) {
     const updatedInterview = { ...interviewData, status };
     if (nextQuestion?.kind === "core") {
@@ -108,6 +109,19 @@ export default function InterviewPrototypePage() {
       updatedInterview.followups_asked += 1;
     }
     return updatedInterview;
+  }
+
+  function getQuestionLabel(currentQuestion) {
+    if (currentQuestion.kind === "followup") return "Follow-up";
+
+    const labels = {
+      introduction: "Introduction",
+      project: "Project discussion",
+      skill: "Technical skills",
+      hr: "HR and behavioral",
+      conclusion: "Interview conclusion",
+    };
+    return labels[currentQuestion.stage] || "Core question";
   }
 
   useEffect(() => {
@@ -120,7 +134,8 @@ export default function InterviewPrototypePage() {
     currentQuestionRef.current = question;
   }, [question]);
 
-  const loadInterview = useCallback(async (interviewId) => {
+  // Restore the saved interview after refresh and load feedback if it is complete.
+  const restoreInterviewSession = useCallback(async (interviewId) => {
     const response = await fetch(
       `${API_URL}/api/interviews/${interviewId}`,
       { credentials: "include", cache: "no-store" }
@@ -162,7 +177,9 @@ export default function InterviewPrototypePage() {
     let isMounted = true;
 
     Promise.resolve()
-      .then(() => (isMounted ? loadInterview(activeInterviewId) : undefined))
+      .then(() => (
+        isMounted ? restoreInterviewSession(activeInterviewId) : undefined
+      ))
       .catch((loadError) => {
         if (isMounted) {
           setError(loadError.message || "Unable to restore the interview.");
@@ -178,7 +195,7 @@ export default function InterviewPrototypePage() {
     return () => {
       isMounted = false;
     };
-  }, [isLoading, user, loadInterview]);
+  }, [isLoading, user, restoreInterviewSession]);
 
   useEffect(() => () => {
     if (countdownTimerRef.current) {
@@ -231,6 +248,7 @@ export default function InterviewPrototypePage() {
 
       const samples = new Uint8Array(analyser.fftSize);
       const multipliers = [0.65, 1, 1.3, 1, 0.65];
+      // Sample microphone volume and scale the bars to show live input activity.
       const updateLevel = () => {
         if (audioContextRef.current !== audioContext) return;
 
@@ -259,7 +277,8 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  function setCurrentTurn(interviewData, nextQuestion) {
+  // Show the next question, or load private feedback when the interview is over.
+  function showNextInterviewTurn(interviewData, nextQuestion) {
     setInterview(interviewData);
     setQuestion(nextQuestion);
     setRetry(null);
@@ -284,6 +303,35 @@ export default function InterviewPrototypePage() {
     setPhase("question_ready");
   }
 
+  async function completeInterviewAfterConclusion() {
+    if (!interview) return;
+
+    setPhase("completing");
+    setError("");
+
+    try {
+      const completionResponse = await fetch(
+        `${API_URL}/api/interviews/${interview.id}/complete`,
+        { method: "POST", credentials: "include" }
+      );
+      const completedInterview = await readResponse(completionResponse);
+      setInterview(completedInterview);
+
+      const feedbackResponse = await fetch(
+        `${API_URL}/api/interviews/${interview.id}/feedback`,
+        { credentials: "include", cache: "no-store" }
+      );
+      setFeedback(await readResponse(feedbackResponse));
+      setPhase("complete");
+    } catch (completionError) {
+      setError(
+        completionError.message || "Unable to prepare final interview feedback."
+      );
+      setPhase("error");
+    }
+  }
+
+  // Ask for microphone access, then let the backend create the interview's first question.
   async function startInterview(event) {
     event.preventDefault();
     setError("");
@@ -334,7 +382,8 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  async function playQuestion() {
+  // Fetch audio with the user's session cookie and play it before the thinking timer.
+  async function playQuestionAudio() {
     if (!question?.audio_url) {
       setError("This question has no speech audio.");
       return;
@@ -357,7 +406,13 @@ export default function InterviewPrototypePage() {
       }
       audioUrlRef.current = URL.createObjectURL(audioBlob);
       audioRef.current = new Audio(audioUrlRef.current);
-      audioRef.current.onended = beginThinkingCountdown;
+      audioRef.current.onended = () => {
+        if (question.kind === "conclusion") {
+          completeInterviewAfterConclusion();
+        } else {
+          startThinkingCountdown();
+        }
+      };
       await audioRef.current.play();
       setPhase("playing");
     } catch (playError) {
@@ -366,7 +421,8 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  function beginThinkingCountdown() {
+  function startThinkingCountdown() {
+    // Give the user five seconds after the question audio ends before recording.
     setCountdown(5);
     setPhase("thinking");
     let remaining = 5;
@@ -406,6 +462,7 @@ export default function InterviewPrototypePage() {
           recordingChunksRef.current.push(event.data);
         }
       };
+      // When the user stops, combine the recorded chunks and send them to the API.
       recorder.onstop = () => {
         if (discardRecordingRef.current) {
           recordingChunksRef.current = [];
@@ -414,7 +471,7 @@ export default function InterviewPrototypePage() {
         const recording = new Blob(recordingChunksRef.current, {
           type: recorder.mimeType || "audio/webm",
         });
-        uploadAnswer(recording, recorder.mimeType || "audio/webm");
+        submitAnswerRecording(recording, recorder.mimeType || "audio/webm");
       };
 
       recorder.start();
@@ -433,7 +490,8 @@ export default function InterviewPrototypePage() {
     stopAudioMeter();
   }
 
-  async function uploadAnswer(recording, mimeType) {
+  // Upload the recording; the response includes its transcript and next question.
+  async function submitAnswerRecording(recording, mimeType) {
     const currentQuestion = currentQuestionRef.current;
     if (!interview || !currentQuestion) {
       setError("The current interview question is missing.");
@@ -461,7 +519,7 @@ export default function InterviewPrototypePage() {
       );
       const data = await readResponse(response);
       setLatestTranscript(data.transcript || "");
-      setCurrentTurn(
+      showNextInterviewTurn(
         updateInterviewProgress(
           interview,
           data.next_question,
@@ -485,7 +543,7 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  async function retryProcessing() {
+  async function retryAnswerProcessing() {
     if (!retry || !interview) return;
 
     setPhase("processing");
@@ -498,7 +556,7 @@ export default function InterviewPrototypePage() {
       );
       const data = await readResponse(response);
       setLatestTranscript(data.transcript || "");
-      setCurrentTurn(
+      showNextInterviewTurn(
         updateInterviewProgress(
           interview,
           data.next_question,
@@ -516,7 +574,8 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  async function stopInterview() {
+  // Stop local media and clear the browser's pointer to this interview.
+  async function endInterviewSession() {
     if (countdownTimerRef.current) {
       window.clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
@@ -556,6 +615,7 @@ export default function InterviewPrototypePage() {
     "loading_audio",
     "uploading",
     "processing",
+    "completing",
   ].includes(phase);
 
   return (
@@ -615,6 +675,7 @@ export default function InterviewPrototypePage() {
               {phase === "loading_audio" && "Loading question audio..."}
               {phase === "uploading" && "Uploading and transcribing your answer..."}
               {phase === "processing" && "Evaluating your answer..."}
+              {phase === "completing" && "Preparing your final feedback..."}
             </p>
           </div>
         )}
@@ -623,16 +684,21 @@ export default function InterviewPrototypePage() {
           <div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-bold uppercase tracking-wide text-primary">
-                {question.kind === "followup" ? "Follow-up" : "Core question"}{" "}
-                {question.sequence_number}
+                {getQuestionLabel(question)}
+                {question.stage === "project" || question.stage === "skill"
+                  ? ` · ${question.topic}`
+                  : ""}
+                {!question.stage ? ` ${question.sequence_number}` : ""}
               </p>
-              <p className="text-xs text-muted">
-                {interview?.core_questions_asked || 0} /{" "}
-                {interview?.core_question_target || 5} core questions
-                {" · "}
-                {interview?.followups_asked || 0} /{" "}
-                {interview?.max_followups || 2} follow-ups
-              </p>
+              {!question.stage && (
+                <p className="text-xs text-muted">
+                  {interview?.core_questions_asked || 0} /{" "}
+                  {interview?.core_question_target || 5} core questions
+                  {" · "}
+                  {interview?.followups_asked || 0} /{" "}
+                  {interview?.max_followups || 2} follow-ups
+                </p>
+              )}
             </div>
             <h2 className="mt-4 text-xl font-bold leading-snug">
               {question.text}
@@ -641,16 +707,19 @@ export default function InterviewPrototypePage() {
             {phase === "question_ready" && (
               <button
                 type="button"
-                onClick={playQuestion}
+                onClick={playQuestionAudio}
                 className="mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover"
               >
-                <Volume2 size={17} /> Play question
+                <Volume2 size={17} />
+                {question.kind === "conclusion" ? "Play closing message" : "Play question"}
               </button>
             )}
 
             {phase === "playing" && (
               <p className="mt-5 text-sm font-medium text-muted">
-                Listen to the question. Recording starts after it finishes.
+                {question.kind === "conclusion"
+                  ? "Listen to the closing message. Your feedback will be prepared afterward."
+                  : "Listen to the question. Recording starts after it finishes."}
               </p>
             )}
 
@@ -706,17 +775,27 @@ export default function InterviewPrototypePage() {
             {phase === "error" && retry && (
               <button
                 type="button"
-                onClick={retryProcessing}
+                onClick={retryAnswerProcessing}
                 className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
               >
                 Retry processing
               </button>
             )}
 
+            {phase === "error" && question.kind === "conclusion" && (
+              <button
+                type="button"
+                onClick={completeInterviewAfterConclusion}
+                className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
+              >
+                Retry final feedback
+              </button>
+            )}
+
             {phase !== "complete" && (
               <button
                 type="button"
-                onClick={stopInterview}
+                onClick={endInterviewSession}
                 disabled={isBusy}
                 className="ml-3 mt-4 text-sm font-medium text-muted underline underline-offset-4 hover:text-foreground disabled:opacity-50"
               >
@@ -753,7 +832,7 @@ export default function InterviewPrototypePage() {
             <FeedbackList title="Practice next" items={feedback.practice_suggestions} />
             <button
               type="button"
-              onClick={stopInterview}
+              onClick={endInterviewSession}
               className="mt-5 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
             >
               Start over

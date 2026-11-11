@@ -1,3 +1,4 @@
+# schemas/interview.py
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -12,7 +13,14 @@ class InterviewCreateRequest(BaseModel):
 class InterviewQuestionResponse(BaseModel):
     id: UUID
     sequence_number: int
-    kind: Literal["core", "followup"]
+    kind: Literal["core", "followup", "conclusion"]
+    stage: Literal[
+        "introduction",
+        "project",
+        "skill",
+        "hr",
+        "conclusion",
+    ] | None
     topic: str | None
     text: str
     audio_url: str | None
@@ -24,6 +32,7 @@ class InterviewResponse(BaseModel):
         "preparing",
         "in_progress",
         "evaluating",
+        "concluding",
         "completed",
         "failed",
         "abandoned",
@@ -50,6 +59,7 @@ class InterviewAnswerResponse(BaseModel):
     interview_status: Literal[
         "in_progress",
         "evaluating",
+        "concluding",
         "completed",
         "failed",
     ]
