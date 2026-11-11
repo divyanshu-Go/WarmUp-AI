@@ -30,6 +30,7 @@ def evaluate_answer_and_prepare_next_turn(
     answer: InterviewAnswer,
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
+    auto_speak: bool = True,
 ) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
     """
     Core adaptive turn engine loop:
@@ -106,8 +107,10 @@ def evaluate_answer_and_prepare_next_turn(
             next_kind = "followup" if decision.action == "DRILL_DOWN" else "core"
             next_stage = decision.active_stage
 
-        # Generate TTS Audio File
-        audio_filename = generate_question_speech(full_spoken_text)
+        # Generate TTS Audio File only if auto_speak is enabled
+        audio_filename = (
+            generate_question_speech(full_spoken_text) if auto_speak else None
+        )
 
         # Create Next Question Record
         next_question = InterviewQuestion(
@@ -165,6 +168,7 @@ def retry_answer_evaluation(
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
     answer_id: uuid.UUID,
+    auto_speak: bool = True,
 ) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
     """Retries evaluating an answer from its saved transcript."""
     answer = db.scalar(
@@ -196,6 +200,7 @@ def retry_answer_evaluation(
         answer=answer,
         user_id=user_id,
         interview_id=interview_id,
+        auto_speak=auto_speak,
     )
 
 

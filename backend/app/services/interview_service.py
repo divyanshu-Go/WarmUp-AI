@@ -38,6 +38,7 @@ def create_interview(
     db: Session,
     user_id: uuid.UUID,
     resume_id: uuid.UUID,
+    auto_speak: bool = True,
 ) -> tuple[Interview, InterviewQuestion]:
     """
     Initializes a dynamic adaptive interview:
@@ -69,7 +70,9 @@ def create_interview(
         )
 
         setup_phase = "initial_question_speech"
-        audio_filename = generate_question_speech(introduction_text)
+        audio_filename = (
+            generate_question_speech(introduction_text) if auto_speak else None
+        )
 
     except GroqNotConfiguredError as exc:
         _log_interview_setup_failure(setup_phase, exc)
@@ -142,7 +145,8 @@ def create_interview(
 
     except Exception:
         db.rollback()
-        delete_question_speech(audio_filename)
+        if audio_filename:
+            delete_question_speech(audio_filename)
         raise
 
     db.refresh(interview)
@@ -225,6 +229,7 @@ def submit_answer(
     interview_id: uuid.UUID,
     question_id: uuid.UUID,
     audio_file: UploadFile,
+    auto_speak: bool = True,
 ) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
     """Saves candidate audio upload and triggers STT & dynamic turn engine."""
     audio_filename = save_answer_audio(audio_file)
@@ -289,6 +294,7 @@ def submit_answer(
         answer=answer,
         user_id=user_id,
         interview_id=interview_id,
+        auto_speak=auto_speak,
     )
 
 
@@ -297,6 +303,7 @@ def retry_answer_transcription(
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
     answer_id: uuid.UUID,
+    auto_speak: bool = True,
 ) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
     """Retries audio transcription if STT previously failed."""
     answer = db.scalar(
@@ -331,6 +338,7 @@ def retry_answer_transcription(
         answer=answer,
         user_id=user_id,
         interview_id=interview_id,
+        auto_speak=auto_speak,
     )
 
 
@@ -339,6 +347,7 @@ def transcribe_answer_and_prepare_next_turn(
     answer: InterviewAnswer,
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
+    auto_speak: bool = True,
 ) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
     """Transcribes audio file to text via Groq STT and triggers evaluation turn."""
     try:
@@ -386,4 +395,5 @@ def transcribe_answer_and_prepare_next_turn(
         answer=answer,
         user_id=user_id,
         interview_id=interview_id,
+        auto_speak=auto_speak,
     )

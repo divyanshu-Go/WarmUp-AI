@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class InterviewCreateRequest(BaseModel):
     resume_id: UUID
+    auto_speak: bool = True
 
 
 class InterviewQuestionResponse(BaseModel):

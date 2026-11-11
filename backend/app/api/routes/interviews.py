@@ -106,6 +106,7 @@ def start_interview(
         db=db,
         user_id=user.id,
         resume_id=payload.resume_id,
+        auto_speak=payload.auto_speak,
     )
 
     return build_interview_response(interview, first_question)
@@ -160,6 +161,7 @@ def read_question_audio(
 def submit_answer(
     interview_id: uuid.UUID,
     question_id: uuid.UUID,
+    auto_speak: bool = True,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -171,6 +173,7 @@ def submit_answer(
         interview_id=interview_id,
         question_id=question_id,
         audio_file=file,
+        auto_speak=auto_speak,
     )
 
     return build_answer_response(answer, interview, next_question)
@@ -183,6 +186,7 @@ def submit_answer(
 def retry_transcription(
     interview_id: uuid.UUID,
     answer_id: uuid.UUID,
+    auto_speak: bool = True,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -191,6 +195,7 @@ def retry_transcription(
         user_id=user.id,
         interview_id=interview_id,
         answer_id=answer_id,
+        auto_speak=auto_speak,
     )
 
     return build_answer_response(answer, interview, next_question)
@@ -203,6 +208,7 @@ def retry_transcription(
 def retry_evaluation(
     interview_id: uuid.UUID,
     answer_id: uuid.UUID,
+    auto_speak: bool = True,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -211,6 +217,7 @@ def retry_evaluation(
         user_id=user.id,
         interview_id=interview_id,
         answer_id=answer_id,
+        auto_speak=auto_speak,
     )
 
     return build_answer_response(answer, interview, next_question)

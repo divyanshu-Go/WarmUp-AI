@@ -1,4 +1,4 @@
-
+// frontend/app/dashboard/page.js
 "use client";
 
 import { useEffect } from "react";

@@ -2,16 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ArrowLeft,
-  CheckCircle2,
-  Loader2,
-  Mic,
-  Square,
-  Volume2,
-} from "lucide-react";
 import Link from "next/link";
+import { ArrowLeft, Loader2, Mic } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+
+import InterviewHeader from "./_components/InterviewHeader";
+import VoiceOrbVisualizer from "./_components/VoiceOrbVisualizer";
+import QuestionCard from "./_components/QuestionCard";
+import RecordingControlBar from "./_components/RecordingControlBar";
+import TranscriptDrawer from "./_components/TranscriptDrawer";
+import FeedbackReport from "./_components/FeedbackReport";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 const RESUME_STORAGE_KEY = "warmup_resume_id";
@@ -85,6 +85,7 @@ export default function InterviewPrototypePage() {
   const [question, setQuestion] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [latestTranscript, setLatestTranscript] = useState("");
+  const [autoSpeak, setAutoSpeak] = useState(true);
   const [phase, setPhase] = useState(() => {
     if (typeof window === "undefined") return "ready";
     try {
@@ -100,7 +101,6 @@ export default function InterviewPrototypePage() {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(null);
 
-  // Keep the displayed question counts in sync with the next turn from the API.
   function updateInterviewProgress(interviewData, nextQuestion, status) {
     const updatedInterview = { ...interviewData, status };
     if (nextQuestion?.kind === "core") {
@@ -109,19 +109,6 @@ export default function InterviewPrototypePage() {
       updatedInterview.followups_asked += 1;
     }
     return updatedInterview;
-  }
-
-  function getQuestionLabel(currentQuestion) {
-    if (currentQuestion.kind === "followup") return "Follow-up";
-
-    const labels = {
-      introduction: "Introduction",
-      project: "Project discussion",
-      skill: "Technical skills",
-      hr: "HR and behavioral",
-      conclusion: "Interview conclusion",
-    };
-    return labels[currentQuestion.stage] || "Core question";
   }
 
   useEffect(() => {
@@ -134,7 +121,6 @@ export default function InterviewPrototypePage() {
     currentQuestionRef.current = question;
   }, [question]);
 
-  // Restore the saved interview after refresh and load feedback if it is complete.
   const restoreInterviewSession = useCallback(async (interviewId) => {
     const response = await fetch(
       `${API_URL}/api/interviews/${interviewId}`,
@@ -168,7 +154,7 @@ export default function InterviewPrototypePage() {
         ACTIVE_INTERVIEW_STORAGE_KEY
       );
     } catch (storageError) {
-      console.warn("Unable to restore the interview from browser storage.", storageError);
+      console.warn("Unable to restore interview from browser storage.", storageError);
       return undefined;
     }
 
@@ -177,9 +163,7 @@ export default function InterviewPrototypePage() {
     let isMounted = true;
 
     Promise.resolve()
-      .then(() => (
-        isMounted ? restoreInterviewSession(activeInterviewId) : undefined
-      ))
+      .then(() => (isMounted ? restoreInterviewSession(activeInterviewId) : undefined))
       .catch((loadError) => {
         if (isMounted) {
           setError(loadError.message || "Unable to restore the interview.");
@@ -187,7 +171,7 @@ export default function InterviewPrototypePage() {
           try {
             window.sessionStorage.removeItem(ACTIVE_INTERVIEW_STORAGE_KEY);
           } catch (storageError) {
-            console.warn("Unable to clear the saved interview ID.", storageError);
+            console.warn("Unable to clear saved interview ID.", storageError);
           }
         }
       });
@@ -214,6 +198,21 @@ export default function InterviewPrototypePage() {
       URL.revokeObjectURL(audioUrlRef.current);
     }
   }, []);
+
+  // Auto-play audio or start reading countdown when question arrives
+  useEffect(() => {
+    if (phase !== "question_ready" || !question) return;
+
+    if (autoSpeak && question.audio_url) {
+      playQuestionAudio();
+    } else {
+      if (question.kind === "conclusion") {
+        completeInterviewAfterConclusion();
+      } else {
+        startThinkingCountdown(10);
+      }
+    }
+  }, [phase, question, autoSpeak]);
 
   function stopAudioMeter() {
     if (audioMeterFrameRef.current !== null) {
@@ -248,7 +247,7 @@ export default function InterviewPrototypePage() {
 
       const samples = new Uint8Array(analyser.fftSize);
       const multipliers = [0.65, 1, 1.3, 1, 0.65];
-      // Sample microphone volume and scale the bars to show live input activity.
+
       const updateLevel = () => {
         if (audioContextRef.current !== audioContext) return;
 
@@ -277,7 +276,6 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  // Show the next question, or load private feedback when the interview is over.
   function showNextInterviewTurn(interviewData, nextQuestion) {
     setInterview(interviewData);
     setQuestion(nextQuestion);
@@ -331,7 +329,6 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  // Ask for microphone access, then let the backend create the interview's first question.
   async function startInterview(event) {
     event.preventDefault();
     setError("");
@@ -361,7 +358,10 @@ export default function InterviewPrototypePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ resume_id: resumeId.trim() }),
+        body: JSON.stringify({
+          resume_id: resumeId.trim(),
+          auto_speak: autoSpeak,
+        }),
       });
       const data = await readResponse(response);
 
@@ -382,10 +382,9 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  // Fetch audio with the user's session cookie and play it before the thinking timer.
   async function playQuestionAudio() {
     if (!question?.audio_url) {
-      setError("This question has no speech audio.");
+      startThinkingCountdown(10);
       return;
     }
 
@@ -410,22 +409,24 @@ export default function InterviewPrototypePage() {
         if (question.kind === "conclusion") {
           completeInterviewAfterConclusion();
         } else {
-          startThinkingCountdown();
+          startThinkingCountdown(5);
         }
       };
       await audioRef.current.play();
       setPhase("playing");
     } catch (playError) {
       setError(playError.message || "Unable to play question audio.");
-      setPhase("question_ready");
+      startThinkingCountdown(10);
     }
   }
 
-  function startThinkingCountdown() {
-    // Give the user five seconds after the question audio ends before recording.
-    setCountdown(5);
+  function startThinkingCountdown(seconds = 5) {
+    if (countdownTimerRef.current) {
+      window.clearInterval(countdownTimerRef.current);
+    }
+    setCountdown(seconds);
     setPhase("thinking");
-    let remaining = 5;
+    let remaining = seconds;
 
     countdownTimerRef.current = window.setInterval(() => {
       remaining -= 1;
@@ -462,7 +463,7 @@ export default function InterviewPrototypePage() {
           recordingChunksRef.current.push(event.data);
         }
       };
-      // When the user stops, combine the recorded chunks and send them to the API.
+
       recorder.onstop = () => {
         if (discardRecordingRef.current) {
           recordingChunksRef.current = [];
@@ -490,7 +491,6 @@ export default function InterviewPrototypePage() {
     stopAudioMeter();
   }
 
-  // Upload the recording; the response includes its transcript and next question.
   async function submitAnswerRecording(recording, mimeType) {
     const currentQuestion = currentQuestionRef.current;
     if (!interview || !currentQuestion) {
@@ -510,7 +510,7 @@ export default function InterviewPrototypePage() {
 
     try {
       const response = await fetch(
-        `${API_URL}/api/interviews/${interview.id}/questions/${currentQuestion.id}/answers`,
+        `${API_URL}/api/interviews/${interview.id}/questions/${currentQuestion.id}/answers?auto_speak=${autoSpeak}`,
         {
           method: "POST",
           credentials: "include",
@@ -574,7 +574,6 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  // Stop local media and clear the browser's pointer to this interview.
   async function endInterviewSession() {
     if (countdownTimerRef.current) {
       window.clearInterval(countdownTimerRef.current);
@@ -590,7 +589,7 @@ export default function InterviewPrototypePage() {
     try {
       window.sessionStorage.removeItem(ACTIVE_INTERVIEW_STORAGE_KEY);
     } catch (storageError) {
-      console.warn("Unable to clear the saved interview ID.", storageError);
+      console.warn("Unable to clear saved interview ID.", storageError);
     }
     setInterview(null);
     setQuestion(null);
@@ -628,20 +627,17 @@ export default function InterviewPrototypePage() {
       </Link>
 
       <h1 className="mt-5 text-3xl font-bold tracking-tight">
-        Interview prototype
+        Technical Interview
       </h1>
       <p className="mt-2 text-sm text-muted">
-        A simple end-to-end check of interview questions, audio, recording,
-        transcription, and feedback.
+        Adaptive voice practice session powered by AI.
       </p>
 
       <section className="mt-6 rounded-[var(--radius-card)] border-2 border-foreground bg-surface p-[var(--ui-space-card)] shadow-[3px_3px_0_var(--primary)]">
+        {/* Start Interview Form */}
         {phase === "ready" && (
           <form onSubmit={startInterview}>
-            <label
-              htmlFor="resume-id"
-              className="block text-sm font-bold"
-            >
+            <label htmlFor="resume-id" className="block text-sm font-bold">
               Resume ID
             </label>
             <input
@@ -652,133 +648,68 @@ export default function InterviewPrototypePage() {
               className="mt-2 w-full rounded-[var(--radius-control)] border-2 border-foreground bg-background px-3 py-2.5 text-sm outline-none focus:border-primary"
             />
             <p className="mt-2 text-xs text-muted">
-              This prototype uses the latest resume uploaded while signed in.
-              You can also paste another resume ID.
+              Uses your latest uploaded resume text to generate dynamic technical probes.
             </p>
             <button
               type="submit"
               disabled={!resumeId.trim()}
-              className="mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--foreground)] transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isBusy ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
-              Start interview
+              Start Technical Interview
             </button>
           </form>
         )}
 
+        {/* Loading Spinner Indicator */}
         {isBusy && (
-          <div className="flex items-center gap-3 py-4">
-            <Loader2 size={19} className="animate-spin text-primary" />
+          <div className="flex items-center gap-3 py-8">
+            <Loader2 size={22} className="animate-spin text-primary" />
             <p className="text-sm font-medium">
-              {phase === "starting" && "Preparing your first question..."}
-              {phase === "loading" && "Restoring your interview..."}
-              {phase === "loading_audio" && "Loading question audio..."}
-              {phase === "uploading" && "Uploading and transcribing your answer..."}
-              {phase === "processing" && "Evaluating your answer..."}
-              {phase === "completing" && "Preparing your final feedback..."}
+              {phase === "starting" && "Analyzing resume roadmap & preparing intro..."}
+              {phase === "loading" && "Restoring session..."}
+              {phase === "loading_audio" && "Synthesizing voice audio..."}
+              {phase === "uploading" && "Transcribing recording via Whisper STT..."}
+              {phase === "processing" && "Evaluating answer & planning next probe..."}
+              {phase === "completing" && "Generating overall interview feedback..."}
             </p>
           </div>
         )}
 
+        {/* Voice Room View */}
         {question && !["ready", "starting", "loading", "complete"].includes(phase) && (
           <div>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-bold uppercase tracking-wide text-primary">
-                {getQuestionLabel(question)}
-                {question.stage === "project" || question.stage === "skill"
-                  ? ` · ${question.topic}`
-                  : ""}
-                {!question.stage ? ` ${question.sequence_number}` : ""}
-              </p>
-              {!question.stage && (
-                <p className="text-xs text-muted">
-                  {interview?.core_questions_asked || 0} /{" "}
-                  {interview?.core_question_target || 5} core questions
-                  {" · "}
-                  {interview?.followups_asked || 0} /{" "}
-                  {interview?.max_followups || 2} follow-ups
-                </p>
-              )}
-            </div>
-            <h2 className="mt-4 text-xl font-bold leading-snug">
-              {question.text}
-            </h2>
+            <InterviewHeader
+              question={question}
+              interview={interview}
+              autoSpeak={autoSpeak}
+              onToggleAutoSpeak={() => setAutoSpeak((prev) => !prev)}
+            />
 
-            {phase === "question_ready" && (
-              <button
-                type="button"
-                onClick={playQuestionAudio}
-                className="mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] transition hover:bg-primary-hover"
-              >
-                <Volume2 size={17} />
-                {question.kind === "conclusion" ? "Play closing message" : "Play question"}
-              </button>
-            )}
+            <VoiceOrbVisualizer
+              phase={phase}
+              countdown={countdown}
+              autoSpeak={autoSpeak}
+            />
 
-            {phase === "playing" && (
-              <p className="mt-5 text-sm font-medium text-muted">
-                {question.kind === "conclusion"
-                  ? "Listen to the closing message. Your feedback will be prepared afterward."
-                  : "Listen to the question. Recording starts after it finishes."}
-              </p>
-            )}
+            <QuestionCard questionText={question.text} />
 
-            {phase === "thinking" && (
-              <p className="mt-5 text-lg font-bold text-primary" aria-live="polite">
-                Recording starts in {countdown}...
-              </p>
-            )}
+            <RecordingControlBar
+              phase={phase}
+              onStopRecording={stopRecording}
+              audioMeterBarsRef={audioMeterBarsRef}
+            />
 
-            {latestTranscript && (
-              <div className="mt-5 rounded-[var(--radius-control)] border-2 border-border bg-surface-raised p-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-muted">
-                  Your last answer (transcript)
-                </p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
-                  {latestTranscript}
-                </p>
-              </div>
-            )}
+            <TranscriptDrawer transcript={latestTranscript} />
 
-            {phase === "recording" && (
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                <span className="inline-flex items-center gap-2 text-sm font-bold text-red-700">
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-600" />
-                  Recording — speak now
-                </span>
-                <div
-                  className="flex h-8 items-center gap-1 px-1"
-                  role="img"
-                  aria-label="Live microphone input level"
-                >
-                  {[0, 1, 2, 3, 4].map((index) => (
-                    <span
-                      key={index}
-                      ref={(element) => {
-                        audioMeterBarsRef.current[index] = element;
-                      }}
-                      className="h-6 w-1.5 origin-center scale-y-[0.12] rounded-full bg-primary transition-transform duration-75"
-                      style={{ transform: "scaleY(0.12)" }}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={stopRecording}
-                  className="inline-flex items-center gap-2 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
-                >
-                  <Square size={15} fill="currentColor" /> Stop and submit
-                </button>
-              </div>
-            )}
-
+            {/* Error Handlers */}
             {phase === "error" && retry && (
               <button
                 type="button"
                 onClick={retryAnswerProcessing}
-                className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
+                className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-hover"
               >
-                Retry processing
+                Retry Processing
               </button>
             )}
 
@@ -786,79 +717,45 @@ export default function InterviewPrototypePage() {
               <button
                 type="button"
                 onClick={completeInterviewAfterConclusion}
-                className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
+                className="mt-4 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2 text-sm font-bold text-white hover:bg-primary-hover"
               >
-                Retry final feedback
+                Retry Final Feedback
               </button>
             )}
 
             {phase !== "complete" && (
-              <button
-                type="button"
-                onClick={endInterviewSession}
-                disabled={isBusy}
-                className="ml-3 mt-4 text-sm font-medium text-muted underline underline-offset-4 hover:text-foreground disabled:opacity-50"
-              >
-                End prototype interview
-              </button>
-            )}
-          </div>
-        )}
-
-        {phase === "complete" && feedback && (
-          <div>
-            <div className="flex items-center gap-2 text-green-800">
-              <CheckCircle2 size={22} />
-              <h2 className="text-xl font-bold">Interview complete</h2>
-            </div>
-            {latestTranscript && (
-              <div className="mt-4 rounded-[var(--radius-control)] border-2 border-border bg-surface-raised p-4">
-                <p className="text-xs font-bold uppercase tracking-wide text-muted">
-                  Your last answer (transcript)
-                </p>
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
-                  {latestTranscript}
-                </p>
+              <div className="mt-6 border-t-2 border-border pt-4">
+                <button
+                  type="button"
+                  onClick={endInterviewSession}
+                  disabled={isBusy}
+                  className="text-xs font-semibold text-muted underline underline-offset-4 hover:text-foreground disabled:opacity-50"
+                >
+                  End Interview Session
+                </button>
               </div>
             )}
-            <p className="mt-4 text-sm font-bold">
-              Overall score: {feedback.overall_score} / 5
-            </p>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              {feedback.summary}
-            </p>
-            <FeedbackList title="Strengths" items={feedback.strengths} />
-            <FeedbackList title="Areas to improve" items={feedback.improvements} />
-            <FeedbackList title="Practice next" items={feedback.practice_suggestions} />
-            <button
-              type="button"
-              onClick={endInterviewSession}
-              className="mt-5 rounded-[var(--radius-control)] border-2 border-foreground bg-primary px-4 py-2.5 text-sm font-bold text-white shadow-[2px_2px_0_var(--primary)] hover:bg-primary-hover"
-            >
-              Start over
-            </button>
           </div>
         )}
 
+        {/* Final Feedback View */}
+        {phase === "complete" && feedback && (
+          <div>
+            <FeedbackReport
+              feedback={feedback}
+              onStartOver={endInterviewSession}
+            />
+            <TranscriptDrawer transcript={latestTranscript} />
+          </div>
+        )}
+
+        {/* Global Error Banner */}
         {error && (
-          <p role="alert" className="mt-4 text-sm font-medium text-red-700">
+          <p role="alert" className="mt-4 text-sm font-medium text-red-600">
             {error}
           </p>
         )}
       </section>
     </main>
-  );
-}
-
-function FeedbackList({ title, items }) {
-  return (
-    <div className="mt-4">
-      <h3 className="text-sm font-bold">{title}</h3>
-      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-muted">
-        {items.map((item, index) => (
-          <li key={`${title}-${index}`}>{item}</li>
-        ))}
-      </ul>
-    </div>
   );
 }
