@@ -1,3 +1,4 @@
+# app/schemas/adaptive_interview.py
 from typing import Literal
 from pydantic import BaseModel, Field
 
@@ -10,11 +11,11 @@ class TopicRubricItem(BaseModel):
     name: str = Field(description="Display name of project, skill, or HR theme")
     target_aspects: list[str] = Field(
         default_factory=list,
-        description="Key technical or architectural topics to probe for this item"
+        description="Key technical or architectural topics to probe for this item",
     )
     status: Literal["untouched", "in_progress", "completed"] = Field(
         default="untouched",
-        description="Current evaluation status"
+        description="Current evaluation status",
     )
     tested_depth: int = Field(default=0, description="Probes asked so far for this item")
     max_depth: int = Field(default=2, description="Maximum probes allowed for this item")
@@ -43,7 +44,7 @@ class TurnDecision(BaseModel):
     )
     active_topic_id: str | None = Field(
         default=None,
-        description="ID of active TopicRubricItem being tested"
+        description="ID of active TopicRubricItem being tested",
     )
     action: Literal["DRILL_DOWN", "ELEVATE_DIFFICULTY", "PIVOT_TOPIC", "CONCLUDE"] = Field(
         description="Conversational trajectory chosen by the AI"
@@ -56,5 +57,86 @@ class TurnDecision(BaseModel):
     )
     is_conclusion: bool = Field(
         default=False,
-        description="Set to true when interview is concluding"
+        description="Set to true when interview is concluding",
+    )
+
+
+# =====================================================================
+# POST-INTERVIEW EVALUATION SCHEMAS (LLM STRUCTURED OUTPUTS)
+# =====================================================================
+
+AnswerVerdict = Literal[
+    "missing_or_off_topic",
+    "incorrect",
+    "weak",
+    "partial",
+    "strong",
+    "exceptional",
+]
+
+ReadinessVerdict = Literal[
+    "Not Ready",
+    "Needs Work",
+    "Borderline",
+    "Strong",
+    "Exceptional",
+]
+
+
+class AnswerEvaluationItemLLM(BaseModel):
+    """Strict, evidence-based evaluation for a single interview Q&A turn."""
+
+    sequence_number: int = Field(
+        description="Exact sequence number of the question being evaluated"
+    )
+    score: int = Field(
+        ge=0,
+        le=10,
+        description="Strict score from 0 (no answer/off-topic) to 10 (senior-level mastery)",
+    )
+    verdict: AnswerVerdict = Field(
+        description="Categorical rating matching the numeric score"
+    )
+    what_went_well: list[str] = Field(
+        default_factory=list,
+        description="Specific accurate points demonstrated in the answer. Leave empty [] if nothing was good.",
+    )
+    what_was_wrong_or_missing: list[str] = Field(
+        default_factory=list,
+        description="Specific errors, vague claims, or missing technical details required by the question.",
+    )
+    critique: str = Field(
+        description="2-3 direct, honest sentences explaining why the answer earned this score."
+    )
+    improved_answer: str = Field(
+        description="A natural, first-person spoken example of how a strong candidate would answer this exact question."
+    )
+
+
+class BatchAnswerEvaluationLLM(BaseModel):
+    """Container for per-question evaluations returned by LangChain structured output."""
+
+    evaluations: list[AnswerEvaluationItemLLM]
+
+
+class OverallAssessmentLLM(BaseModel):
+    """Holistic interview synthesis grounded strictly in the evaluated conversation."""
+
+    readiness_verdict: ReadinessVerdict = Field(
+        description="Overall interview readiness tier aligned with the computed average score"
+    )
+    executive_summary: str = Field(
+        description="3-4 direct sentences summarizing the candidate's actual performance across the interview."
+    )
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="Evidence-backed strengths demonstrated across answers. Leave empty [] if none.",
+    )
+    weaknesses: list[str] = Field(
+        default_factory=list,
+        description="Concrete technical or communication gaps exposed during the interview.",
+    )
+    actionable_improvements: list[str] = Field(
+        default_factory=list,
+        description="Specific, practical topics and habits to practice based on what went wrong.",
     )

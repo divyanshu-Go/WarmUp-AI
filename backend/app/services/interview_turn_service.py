@@ -1,3 +1,5 @@
+# app/services/interview_turn_service.py
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -9,20 +11,30 @@ from app.models.interview import Interview
 from app.models.interview_answer import InterviewAnswer
 from app.models.interview_question import InterviewQuestion
 from app.models.resume import Resume
+from app.schemas.adaptive_interview import ReadinessVerdict
+from app.schemas.interview import (
+    InterviewFeedbackResponse,
+    QuestionEvaluationResponse,
+)
 from app.services.groq_service import (
     AudioStorageError,
     GroqNotConfiguredError,
     GroqProviderError,
     delete_question_speech,
-    generate_final_feedback,
     generate_question_speech,
 )
-from app.services.langchain_service import generate_adaptive_turn
+from app.services.langchain_service import (
+    evaluate_interview_answers,
+    generate_adaptive_turn,
+    generate_overall_assessment,
+)
 from app.services.rubric_state_service import (
     determine_next_stage,
     parse_topic_rubric,
     update_rubric_and_ledger,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate_answer_and_prepare_next_turn(
@@ -209,12 +221,17 @@ def complete_interview_after_conclusion(
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
 ) -> tuple[Interview, InterviewQuestion | None]:
-    """Generates final feedback summary after conclusion audio completes."""
+    """
+    Evaluates all answered interview turns strictly on transcript evidence
+    (without resume bias) and persists the final feedback report.
+    """
     interview = db.scalar(
-        select(Interview).where(
+        select(Interview)
+        .where(
             Interview.id == interview_id,
             Interview.user_id == user_id,
         )
+        .with_for_update()
     )
     if not interview:
         raise HTTPException(404, "Interview not found.")
@@ -235,33 +252,122 @@ def complete_interview_after_conclusion(
     ):
         raise HTTPException(409, "The interview conclusion is not ready.")
 
-    resume = db.get(Resume, interview.resume_id)
-    if not resume or not resume.resume_text:
-        raise HTTPException(409, "The interview resume is not available.")
+    answered_rows = _load_answered_turns(db, interview.id)
+    if not answered_rows:
+        raise HTTPException(409, "No answered questions found to evaluate.")
 
-    evaluations = _load_saved_evaluation_context(db, interview.id)
+    qa_turns_for_llm = [
+        {
+            "sequence_number": question.sequence_number,
+            "kind": question.kind,
+            "stage": question.stage,
+            "topic": question.topic,
+            "question": question.text,
+            "candidate_transcript": (answer.transcript or "").strip(),
+        }
+        for question, answer in answered_rows
+    ]
+
     try:
-        final_feedback = generate_final_feedback(
-            resume_text=resume.resume_text,
-            evaluations=evaluations,
+        # 1. Per-question strict evaluation
+        llm_evaluations = evaluate_interview_answers(qa_turns_for_llm)
+        eval_by_seq = {item.sequence_number: item for item in llm_evaluations}
+
+        question_responses: list[QuestionEvaluationResponse] = []
+        for question, answer in answered_rows:
+            item = eval_by_seq.get(question.sequence_number)
+            if not item:
+                raise ValueError(
+                    f"Missing evaluation for question sequence {question.sequence_number}."
+                )
+
+            q_eval = QuestionEvaluationResponse(
+                question_id=question.id,
+                sequence_number=question.sequence_number,
+                kind=question.kind,
+                stage=question.stage,
+                topic=question.topic,
+                question_text=question.text,
+                candidate_transcript=(answer.transcript or "").strip(),
+                score=item.score,
+                verdict=item.verdict,
+                what_went_well=item.what_went_well,
+                what_was_wrong_or_missing=item.what_was_wrong_or_missing,
+                critique=item.critique,
+                improved_answer=item.improved_answer,
+            )
+            answer.evaluation = q_eval.model_dump(mode="json")
+            question_responses.append(q_eval)
+
+        # 2. Deterministic overall score & verdict tier
+        overall_score, readiness_verdict = _compute_overall_score_and_verdict(
+            [q.score for q in question_responses]
         )
+
+        # 3. Overall synthesis strictly from evaluated turns
+        overall_llm = generate_overall_assessment(
+            qa_turns=qa_turns_for_llm,
+            question_evaluations=[
+                q.model_dump(mode="json") for q in question_responses
+            ],
+            overall_score=overall_score,
+            readiness_verdict=readiness_verdict,
+        )
+
+        feedback_payload = InterviewFeedbackResponse(
+            overall_score=overall_score,
+            max_score=10,
+            readiness_verdict=readiness_verdict,
+            executive_summary=overall_llm.executive_summary,
+            strengths=overall_llm.strengths,
+            weaknesses=overall_llm.weaknesses,
+            actionable_improvements=overall_llm.actionable_improvements,
+            question_evaluations=question_responses,
+        )
+
     except GroqNotConfiguredError as exc:
         raise HTTPException(
             503,
             "Interview AI is not configured. Please try again later.",
         ) from exc
-    except GroqProviderError as exc:
+    except Exception as exc:
+        logger.exception(
+            "Failed to generate final interview feedback for interview %s.",
+            interview.id,
+        )
         raise HTTPException(
             502,
             "Unable to generate final interview feedback. Please try again.",
         ) from exc
 
-    interview.final_feedback = final_feedback.model_dump()
+    interview.final_feedback = feedback_payload.model_dump(mode="json")
     interview.status = "completed"
     interview.completed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(interview)
     return interview, conclusion
+
+
+def _compute_overall_score_and_verdict(
+    scores: list[int],
+) -> tuple[float, ReadinessVerdict]:
+    """Computes deterministic arithmetic mean (0-10) and maps it to a readiness tier."""
+    if not scores:
+        return 0.0, "Not Ready"
+
+    avg = round(sum(scores) / len(scores), 1)
+    if avg < 3.5:
+        verdict: ReadinessVerdict = "Not Ready"
+    elif avg < 5.5:
+        verdict = "Needs Work"
+    elif avg < 7.0:
+        verdict = "Borderline"
+    elif avg < 8.5:
+        verdict = "Strong"
+    else:
+        verdict = "Exceptional"
+
+    return avg, verdict
 
 
 def _load_prior_conversation_turns(
@@ -289,26 +395,23 @@ def _load_prior_conversation_turns(
     ]
 
 
-def _load_saved_evaluation_context(
+def _load_answered_turns(
     db: Session,
     interview_id: uuid.UUID,
-) -> list[dict[str, object]]:
-    """Loads overall turns context for the final feedback generator."""
+) -> list[tuple[InterviewQuestion, InterviewAnswer]]:
+    """Loads all answered non-conclusion Q&A turns ordered chronologically."""
     rows = db.execute(
         select(InterviewQuestion, InterviewAnswer)
         .join(
             InterviewAnswer,
             InterviewAnswer.question_id == InterviewQuestion.id,
         )
-        .where(InterviewQuestion.interview_id == interview_id)
+        .where(
+            InterviewQuestion.interview_id == interview_id,
+            InterviewQuestion.kind != "conclusion",
+            InterviewAnswer.transcript.is_not(None),
+        )
         .order_by(InterviewQuestion.sequence_number.asc())
     ).all()
 
-    return [
-        {
-            "question": question.text[:500],
-            "topic": question.topic,
-            "evaluation": answer.evaluation or {},
-        }
-        for question, answer in rows
-    ]
+    return [(q, a) for q, a in rows if (a.transcript or "").strip()]

@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.schemas.adaptive_interview import AnswerVerdict
+
 
 class InterviewCreateRequest(BaseModel):
     resume_id: UUID
@@ -70,9 +72,34 @@ class InterviewAnswerResponse(BaseModel):
     updated_at: datetime
 
 
+class QuestionEvaluationResponse(BaseModel):
+    question_id: UUID
+    sequence_number: int
+    kind: Literal["core", "followup", "conclusion"]
+    stage: Literal[
+        "introduction",
+        "project",
+        "skill",
+        "hr",
+        "conclusion",
+    ] | None
+    topic: str | None
+    question_text: str
+    candidate_transcript: str
+    score: int
+    verdict: AnswerVerdict
+    what_went_well: list[str]
+    what_was_wrong_or_missing: list[str]
+    critique: str
+    improved_answer: str
+
+
 class InterviewFeedbackResponse(BaseModel):
-    overall_score: int
-    summary: str
+    overall_score: float
+    max_score: int = 10
+    readiness_verdict: str
+    executive_summary: str
     strengths: list[str]
-    improvements: list[str]
-    practice_suggestions: list[str]
+    weaknesses: list[str]
+    actionable_improvements: list[str]
+    question_evaluations: list[QuestionEvaluationResponse]
