@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Mic } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
@@ -61,6 +61,8 @@ function getAudioExtension(mimeType) {
 export default function InterviewPrototypePage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryResumeId = searchParams.get("resumeId") || "";
   const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
@@ -82,6 +84,15 @@ export default function InterviewPrototypePage() {
       return "";
     }
   });
+  useEffect(() => {
+    if (!queryResumeId) return;
+    setResumeId(queryResumeId);
+    try {
+      window.localStorage.setItem(RESUME_STORAGE_KEY, queryResumeId);
+    } catch (storageError) {
+      console.warn("Unable to save resume ID from URL.", storageError);
+    }
+  }, [queryResumeId]);
   const [interview, setInterview] = useState(null);
   const [question, setQuestion] = useState(null);
   const [feedback, setFeedback] = useState(null);

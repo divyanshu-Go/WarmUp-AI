@@ -31,6 +31,7 @@ class InterviewQuestionResponse(BaseModel):
 
 class InterviewResponse(BaseModel):
     id: UUID
+    resume_id: UUID
     status: Literal[
         "preparing",
         "in_progress",
@@ -103,3 +104,27 @@ class InterviewFeedbackResponse(BaseModel):
     weaknesses: list[str]
     actionable_improvements: list[str]
     question_evaluations: list[QuestionEvaluationResponse]
+
+class InterviewHistoryItemResponse(BaseModel):
+    id: UUID
+    status: Literal[
+        "preparing",
+        "in_progress",
+        "evaluating",
+        "concluding",
+        "completed",
+        "failed",
+        "abandoned",
+    ]
+    core_question_target: int
+    core_questions_asked: int
+    followups_asked: int
+    resume_id: UUID
+    resume_filename: str
+    resume_created_at: datetime
+    overall_score: float | None = None
+    max_score: int = 10
+    readiness_verdict: str | None = None
+    has_feedback: bool = False
+    created_at: datetime
+    completed_at: datetime | None

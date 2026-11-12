@@ -1,3 +1,4 @@
+# backend/app/schemas/resume.py
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -32,6 +33,7 @@ class ResumeStatusResponse(BaseModel):
 
     candidate_name: str | None
     candidate_email: str | None
+    resume_text: str | None = None
 
     error_message: str | None
     created_at: datetime

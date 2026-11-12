@@ -1,3 +1,4 @@
+# backend/app/api/routes/resumes.py
 import hmac
 import uuid
 from datetime import datetime, timezone
@@ -11,6 +12,7 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,6 +55,7 @@ def get_resume_response(resume: Resume):
         processing_stage=resume.processing_stage,
         candidate_name=resume.candidate_name,
         candidate_email=resume.candidate_email,
+        resume_text=resume.resume_text,
         error_message=resume.error_message,
         created_at=resume.created_at,
     )
@@ -154,6 +157,51 @@ async def upload_resume(
         claim_token=claim_token,
     )
 
+
+@router.get(
+    "",
+    response_model=list[ResumeStatusResponse],
+)
+def list_user_resumes(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resumes = db.scalars(
+        select(Resume)
+        .where(Resume.user_id == user.id)
+        .order_by(Resume.created_at.desc())
+    ).all()
+
+    return [get_resume_response(resume) for resume in resumes]
+
+
+@router.get(
+    "/{resume_id}/file",
+    response_class=FileResponse,
+)
+def download_resume_file(
+    resume_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    resume = db.get(Resume, resume_id)
+
+    if not resume or resume.user_id != user.id:
+        raise HTTPException(404, "Resume not found.")
+
+    storage_root = get_storage_directory().resolve()
+    file_path = (storage_root / resume.storage_path).resolve()
+
+    if not file_path.is_relative_to(storage_root) or not file_path.is_file():
+        raise HTTPException(404, "Resume file is no longer available.")
+
+    return FileResponse(
+        path=file_path,
+        media_type="application/pdf",
+        filename=resume.original_filename,
+        content_disposition_type="inline",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 @router.get(
     "/{resume_id}",

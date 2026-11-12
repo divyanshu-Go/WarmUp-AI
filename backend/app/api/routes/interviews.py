@@ -4,17 +4,20 @@ import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.api.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.interview import Interview
 from app.models.interview_answer import InterviewAnswer
 from app.models.interview_question import InterviewQuestion
+from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.interview import (
     InterviewCreateRequest,
     InterviewAnswerResponse,
     InterviewFeedbackResponse,
+    InterviewHistoryItemResponse,
     InterviewQuestionResponse,
     InterviewResponse,
 )
@@ -61,6 +64,7 @@ def build_interview_response(
 
     return InterviewResponse(
         id=interview.id,
+        resume_id=interview.resume_id,
         status=interview.status,
         core_question_target=interview.core_question_target,
         core_questions_asked=interview.core_questions_asked,
@@ -89,6 +93,49 @@ def build_answer_response(
         created_at=answer.created_at,
         updated_at=answer.updated_at,
     )
+
+
+@router.get(
+    "",
+    response_model=list[InterviewHistoryItemResponse],
+)
+def list_user_interviews(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    rows = db.execute(
+        select(Interview, Resume)
+        .join(Resume, Interview.resume_id == Resume.id)
+        .where(Interview.user_id == user.id)
+        .order_by(Interview.created_at.desc())
+    ).all()
+
+    history: list[InterviewHistoryItemResponse] = []
+
+    for interview, resume in rows:
+        feedback = interview.final_feedback if isinstance(interview.final_feedback, dict) else {}
+        has_feedback = interview.status == "completed" and bool(feedback)
+
+        history.append(
+            InterviewHistoryItemResponse(
+                id=interview.id,
+                status=interview.status,
+                core_question_target=interview.core_question_target,
+                core_questions_asked=interview.core_questions_asked,
+                followups_asked=interview.followups_asked,
+                resume_id=resume.id,
+                resume_filename=resume.original_filename,
+                resume_created_at=resume.created_at,
+                overall_score=feedback.get("overall_score") if has_feedback else None,
+                max_score=feedback.get("max_score", 10) if has_feedback else 10,
+                readiness_verdict=feedback.get("readiness_verdict") if has_feedback else None,
+                has_feedback=has_feedback,
+                created_at=interview.created_at,
+                completed_at=interview.completed_at,
+            )
+        )
+
+    return history
 
 
 @router.post(
