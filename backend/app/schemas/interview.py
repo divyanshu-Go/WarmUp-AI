@@ -26,8 +26,7 @@ class InterviewQuestionResponse(BaseModel):
     ] | None
     topic: str | None
     text: str
-    audio_url: str | None
-
+    audio_data_url: str | None = None
 
 class InterviewResponse(BaseModel):
     id: UUID

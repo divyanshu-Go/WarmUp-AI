@@ -2,7 +2,6 @@
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -24,8 +23,6 @@ from app.schemas.interview import (
 from app.services.interview_service import (
     create_interview,
     get_interview,
-    get_question_audio_path,
-    retry_answer_transcription,
     submit_answer as submit_interview_answer,
 )
 from app.services.interview_turn_service import (
@@ -43,6 +40,7 @@ router = APIRouter(
 def build_interview_response(
     interview: Interview,
     current_question: InterviewQuestion | None,
+    audio_data_url: str | None = None,
 ) -> InterviewResponse:
     question_response = None
 
@@ -54,12 +52,7 @@ def build_interview_response(
             stage=current_question.stage,
             topic=current_question.topic,
             text=current_question.text,
-            audio_url=(
-                f"/api/interviews/{current_question.interview_id}/"
-                f"questions/{current_question.id}/audio"
-                if current_question.audio_path
-                else None
-            ),
+            audio_data_url=audio_data_url,
         )
 
     return InterviewResponse(
@@ -81,8 +74,13 @@ def build_answer_response(
     answer: InterviewAnswer,
     interview: Interview,
     next_question: InterviewQuestion | None,
+    audio_data_url: str | None = None,
 ) -> InterviewAnswerResponse:
-    interview_response = build_interview_response(interview, next_question)
+    interview_response = build_interview_response(
+        interview,
+        next_question,
+        audio_data_url=audio_data_url,
+    )
 
     return InterviewAnswerResponse(
         id=answer.id,
@@ -148,15 +146,19 @@ def start_interview(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # The service creates the interview and its first resume-based question.
-    interview, first_question = create_interview(
+    interview, first_question, audio_data_url = create_interview(
         db=db,
         user_id=user.id,
         resume_id=payload.resume_id,
         auto_speak=payload.auto_speak,
     )
 
-    return build_interview_response(interview, first_question)
+    return build_interview_response(
+        interview,
+        first_question,
+        audio_data_url=audio_data_url,
+    )
+
 
 
 @router.get(
@@ -177,35 +179,12 @@ def read_interview(
     return build_interview_response(interview, current_question)
 
 
-@router.get(
-    "/{interview_id}/questions/{question_id}/audio",
-    response_class=FileResponse,
-)
-def read_question_audio(
-    interview_id: uuid.UUID,
-    question_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    audio_path = get_question_audio_path(
-        db=db,
-        user_id=user.id,
-        interview_id=interview_id,
-        question_id=question_id,
-    )
-
-    return FileResponse(
-        path=audio_path,
-        media_type="audio/wav",
-        headers={"Cache-Control": "private, no-store"},
-    )
-
 
 @router.post(
     "/{interview_id}/questions/{question_id}/answers",
     response_model=InterviewAnswerResponse,
 )
-def submit_answer(
+async def submit_answer(
     interview_id: uuid.UUID,
     question_id: uuid.UUID,
     auto_speak: bool = True,
@@ -213,8 +192,7 @@ def submit_answer(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # The response contains the transcript and the next question, if any.
-    answer, interview, next_question = submit_interview_answer(
+    answer, interview, next_question, audio_data_url = await submit_interview_answer(
         db=db,
         user_id=user.id,
         interview_id=interview_id,
@@ -223,29 +201,12 @@ def submit_answer(
         auto_speak=auto_speak,
     )
 
-    return build_answer_response(answer, interview, next_question)
-
-
-@router.post(
-    "/{interview_id}/answers/{answer_id}/retry-transcription",
-    response_model=InterviewAnswerResponse,
-)
-def retry_transcription(
-    interview_id: uuid.UUID,
-    answer_id: uuid.UUID,
-    auto_speak: bool = True,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    answer, interview, next_question = retry_answer_transcription(
-        db=db,
-        user_id=user.id,
-        interview_id=interview_id,
-        answer_id=answer_id,
-        auto_speak=auto_speak,
+    return build_answer_response(
+        answer,
+        interview,
+        next_question,
+        audio_data_url=audio_data_url,
     )
-
-    return build_answer_response(answer, interview, next_question)
 
 
 @router.post(
@@ -259,7 +220,7 @@ def retry_evaluation(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    answer, interview, next_question = retry_answer_evaluation(
+    answer, interview, next_question, audio_data_url = retry_answer_evaluation(
         db=db,
         user_id=user.id,
         interview_id=interview_id,
@@ -267,7 +228,12 @@ def retry_evaluation(
         auto_speak=auto_speak,
     )
 
-    return build_answer_response(answer, interview, next_question)
+    return build_answer_response(
+        answer,
+        interview,
+        next_question,
+        audio_data_url=audio_data_url,
+    )
 
 
 @router.post(

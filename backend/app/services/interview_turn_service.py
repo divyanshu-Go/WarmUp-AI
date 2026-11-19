@@ -17,11 +17,9 @@ from app.schemas.interview import (
     QuestionEvaluationResponse,
 )
 from app.services.groq_service import (
-    AudioStorageError,
     GroqNotConfiguredError,
     GroqProviderError,
-    delete_question_speech,
-    generate_question_speech,
+    generate_question_speech_data_url,
 )
 from app.services.langchain_service import (
     evaluate_interview_answers,
@@ -43,7 +41,7 @@ def evaluate_answer_and_prepare_next_turn(
     user_id: uuid.UUID,
     interview_id: uuid.UUID,
     auto_speak: bool = True,
-) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
+) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None, str | None]:
     """
     Core adaptive turn engine loop:
     1. Loads conversation context and current rubric state.
@@ -76,7 +74,6 @@ def evaluate_answer_and_prepare_next_turn(
     answer.status = "evaluating"
     db.commit()
 
-    audio_filename = None
     try:
         topic_rubric = parse_topic_rubric(interview)
         prior_history = _load_prior_conversation_turns(db, interview.id, question.id)
@@ -119,9 +116,11 @@ def evaluate_answer_and_prepare_next_turn(
             next_kind = "followup" if decision.action == "DRILL_DOWN" else "core"
             next_stage = decision.active_stage
 
-        # Generate TTS Audio File only if auto_speak is enabled
-        audio_filename = (
-            generate_question_speech(full_spoken_text) if auto_speak else None
+        # Generate in-memory Base64 WAV Data URL only if auto_speak is enabled
+        audio_data_url = (
+            generate_question_speech_data_url(full_spoken_text)
+            if auto_speak
+            else None
         )
 
         # Create Next Question Record
@@ -133,7 +132,7 @@ def evaluate_answer_and_prepare_next_turn(
             topic=decision.active_topic_id or "General",
             text=full_spoken_text,
             parent_question_id=question.id if next_kind == "followup" else None,
-            audio_path=audio_filename,
+            audio_path=None,
         )
         db.add(next_question)
 
@@ -150,17 +149,14 @@ def evaluate_answer_and_prepare_next_turn(
 
         db.refresh(answer)
         db.refresh(next_question)
-        return answer, interview, next_question
+        return answer, interview, next_question, audio_data_url
 
     except (
         GroqNotConfiguredError,
         GroqProviderError,
-        AudioStorageError,
         Exception,
     ) as exc:
         db.rollback()
-        if audio_filename:
-            delete_question_speech(audio_filename)
 
         answer.status = "evaluation_failed"
         db.commit()
@@ -181,7 +177,7 @@ def retry_answer_evaluation(
     interview_id: uuid.UUID,
     answer_id: uuid.UUID,
     auto_speak: bool = True,
-) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None]:
+) -> tuple[InterviewAnswer, Interview, InterviewQuestion | None, str | None]:
     """Retries evaluating an answer from its saved transcript."""
     answer = db.scalar(
         select(InterviewAnswer)

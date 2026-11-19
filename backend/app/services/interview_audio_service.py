@@ -1,4 +1,3 @@
-import uuid
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
@@ -24,9 +23,10 @@ SUPPORTED_AUDIO_TYPES = {
 }
 
 
-def save_answer_audio(file: UploadFile) -> str:
-    # Validate the browser recording, enforce its size limit, and save it privately.
-    extension = Path(file.filename or "").suffix.lower()
+async def read_validated_answer_audio(file: UploadFile) -> tuple[str, bytes]:
+    """Validate browser recording format and 4 MB limit, returning (filename, bytes) in RAM."""
+    filename = Path(file.filename or "answer.webm").name
+    extension = Path(filename).suffix.lower()
     accepted_content_types = SUPPORTED_AUDIO_TYPES.get(extension)
 
     if not accepted_content_types:
@@ -40,62 +40,26 @@ def save_answer_audio(file: UploadFile) -> str:
     if content_type not in accepted_content_types:
         raise HTTPException(415, "The uploaded file type does not match its format.")
 
-    storage_directory = Path(
-        settings.interview_answer_audio_storage_dir
-    ).resolve()
-    filename = f"{uuid.uuid4()}{extension}"
-    audio_path = storage_directory / filename
     max_size = settings.interview_max_answer_audio_mb * 1024 * 1024
-    total_size = 0
+    buffer = bytearray()
 
     try:
-        storage_directory.mkdir(parents=True, exist_ok=True)
+        while True:
+            chunk = await file.read(CHUNK_SIZE)
+            if not chunk:
+                break
 
-        with audio_path.open("wb") as output:
-            while True:
-                chunk = file.file.read(CHUNK_SIZE)
+            buffer.extend(chunk)
 
-                if not chunk:
-                    break
+            if len(buffer) > max_size:
+                raise HTTPException(
+                    413,
+                    f"Recording must be smaller than {settings.interview_max_answer_audio_mb} MB.",
+                )
 
-                total_size += len(chunk)
-
-                if total_size > max_size:
-                    raise HTTPException(
-                        413,
-                        "The recording exceeds the maximum allowed size.",
-                    )
-
-                output.write(chunk)
-
-        if total_size == 0:
+        if not buffer:
             raise HTTPException(400, "The uploaded recording is empty.")
 
-        return filename
-    except Exception:
-        audio_path.unlink(missing_ok=True)
-        raise
+        return filename, bytes(buffer)
     finally:
-        file.file.close()
-
-
-def get_answer_audio_path(filename: str) -> Path:
-    storage_directory = Path(
-        settings.interview_answer_audio_storage_dir
-    ).resolve()
-    audio_path = (storage_directory / filename).resolve()
-
-    if audio_path.parent != storage_directory or not audio_path.is_file():
-        raise HTTPException(404, "Answer audio not found.")
-
-    return audio_path
-
-
-def delete_answer_audio(filename: str) -> None:
-    storage_directory = Path(
-        settings.interview_answer_audio_storage_dir
-    ).resolve()
-    audio_path = (storage_directory / filename).resolve()
-
-    if audio_path.parent == storage_directory:
-        audio_path.unlink(missing_ok=True)
+        await file.close()

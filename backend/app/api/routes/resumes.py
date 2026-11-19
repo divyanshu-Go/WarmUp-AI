@@ -12,7 +12,7 @@ from fastapi import (
     HTTPException,
     UploadFile,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -31,12 +31,13 @@ from app.schemas.resume import (
 )
 from app.services.resume_service import (
     create_claim_token,
+    delete_resume_from_cloudinary,
     extract_basic_information,
     extract_resume_text,
     get_guest_expiry,
-    get_storage_directory,
     hash_claim_token,
-    save_resume_file,
+    read_validated_resume_bytes,
+    upload_resume_to_cloudinary,
 )
 
 
@@ -98,20 +99,13 @@ async def upload_resume(
         )
 
     resume_id = uuid.uuid4()
-
-    storage_path, file_size = await save_resume_file(
-        file,
+    pdf_bytes = await read_validated_resume_bytes(file)
+    resume_text = extract_resume_text(pdf_bytes)
+    basic_info = extract_basic_information(resume_text)
+    cloudinary_url, cloudinary_public_id = upload_resume_to_cloudinary(
+        pdf_bytes,
         resume_id,
     )
-
-    try:
-        resume_text = extract_resume_text(storage_path)
-        basic_info = extract_basic_information(resume_text)
-
-    except HTTPException:
-        # Do not keep invalid or unprocessable uploads.
-        (get_storage_directory() / storage_path).unlink(missing_ok=True)
-        raise
 
     claim_token = None
     claim_token_hash = None
@@ -125,8 +119,8 @@ async def upload_resume(
         id=resume_id,
         user_id=user.id if user else None,
         original_filename=Path(file.filename).name[:255],
-        storage_path=storage_path,
-        file_size_bytes=file_size,
+        storage_path=cloudinary_url,
+        file_size_bytes=len(pdf_bytes),
         claim_token_hash=claim_token_hash,
         expires_at=expires_at,
         status="awaiting_auth" if user is None else "ready_for_details",
@@ -140,10 +134,9 @@ async def upload_resume(
         db.add(resume)
         db.commit()
         db.refresh(resume)
-
     except Exception:
         db.rollback()
-        (get_storage_directory() / storage_path).unlink(missing_ok=True)
+        delete_resume_from_cloudinary(cloudinary_public_id)
         raise
 
     return ResumeUploadResponse(
@@ -156,7 +149,6 @@ async def upload_resume(
         candidate_email=resume.candidate_email,
         claim_token=claim_token,
     )
-
 
 @router.get(
     "",
@@ -175,10 +167,7 @@ def list_user_resumes(
     return [get_resume_response(resume) for resume in resumes]
 
 
-@router.get(
-    "/{resume_id}/file",
-    response_class=FileResponse,
-)
+@router.get("/{resume_id}/file")
 def download_resume_file(
     resume_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -189,19 +178,15 @@ def download_resume_file(
     if not resume or resume.user_id != user.id:
         raise HTTPException(404, "Resume not found.")
 
-    storage_root = get_storage_directory().resolve()
-    file_path = (storage_root / resume.storage_path).resolve()
-
-    if not file_path.is_relative_to(storage_root) or not file_path.is_file():
+    if not resume.storage_path or not resume.storage_path.startswith("https://"):
         raise HTTPException(404, "Resume file is no longer available.")
 
-    return FileResponse(
-        path=file_path,
-        media_type="application/pdf",
-        filename=resume.original_filename,
-        content_disposition_type="inline",
+    return RedirectResponse(
+        url=resume.storage_path,
+        status_code=302,
         headers={"Cache-Control": "private, no-store"},
     )
+
 
 @router.get(
     "/{resume_id}",

@@ -80,54 +80,78 @@ export default function DashboardPage() {
     }
   }, [isLoading, user, router]);
 
+  const fetchUserSpace = useCallback(async () => {
+    const [resumesRes, interviewsRes] = await Promise.all([
+      fetch(`${API_URL}/api/resumes`, {
+        credentials: "include",
+        cache: "no-store",
+      }),
+      fetch(`${API_URL}/api/interviews`, {
+        credentials: "include",
+        cache: "no-store",
+      }),
+    ]);
+
+    if (!resumesRes.ok || !interviewsRes.ok) {
+      throw new Error("Unable to load your workspace data.");
+    }
+
+    const [resumesData, interviewsData] = await Promise.all([
+      resumesRes.json(),
+      interviewsRes.json(),
+    ]);
+
+    return { resumesData, interviewsData };
+  }, []);
+
+  const applyUserSpace = useCallback(({ resumesData, interviewsData }) => {
+    setResumes(resumesData);
+    setInterviews(interviewsData);
+
+    // Keep localStorage synced with the latest resume if available
+    if (resumesData.length > 0) {
+      try {
+        window.localStorage.setItem(RESUME_STORAGE_KEY, resumesData[0].id);
+      } catch {
+        // Ignore storage restrictions
+      }
+    }
+  }, []);
+
   const loadUserSpace = useCallback(async () => {
     setIsFetchingData(true);
     setError("");
 
     try {
-      const [resumesRes, interviewsRes] = await Promise.all([
-        fetch(`${API_URL}/api/resumes`, {
-          credentials: "include",
-          cache: "no-store",
-        }),
-        fetch(`${API_URL}/api/interviews`, {
-          credentials: "include",
-          cache: "no-store",
-        }),
-      ]);
-
-      if (!resumesRes.ok || !interviewsRes.ok) {
-        throw new Error("Unable to load your workspace data.");
-      }
-
-      const [resumesData, interviewsData] = await Promise.all([
-        resumesRes.json(),
-        interviewsRes.json(),
-      ]);
-
-      setResumes(resumesData);
-      setInterviews(interviewsData);
-
-      // Keep localStorage synced with the latest resume if available
-      if (resumesData.length > 0) {
-        try {
-          window.localStorage.setItem(RESUME_STORAGE_KEY, resumesData[0].id);
-        } catch {
-          // Ignore storage restrictions
-        }
-      }
+      applyUserSpace(await fetchUserSpace());
     } catch (loadError) {
       setError(loadError.message || "Something went wrong loading your space.");
     } finally {
       setIsFetchingData(false);
     }
-  }, []);
+  }, [applyUserSpace, fetchUserSpace]);
 
   useEffect(() => {
-    if (!isLoading && user) {
-      loadUserSpace();
-    }
-  }, [isLoading, user, loadUserSpace]);
+    if (isLoading || !user) return undefined;
+
+    let isActive = true;
+    fetchUserSpace()
+      .then((data) => {
+        if (isActive) applyUserSpace(data);
+      })
+      .catch((loadError) => {
+        if (isActive) {
+          setError(loadError.message || "Something went wrong loading your space.");
+        }
+      })
+      .finally(() => {
+        if (isActive) setIsFetchingData(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [isLoading, user, applyUserSpace, fetchUserSpace]);
 
   async function handleResumeUpload(event) {
     const file = event.target.files?.[0];
@@ -151,6 +175,7 @@ export default function DashboardPage() {
         throw new Error(data.detail || "Unable to upload resume.");
       }
 
+      setIsFetchingData(true);
       await loadUserSpace();
       setShowResumeText(false);
     } catch (uploadError) {

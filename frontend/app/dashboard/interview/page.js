@@ -1,7 +1,7 @@
 // frontend/app/dashboard/interview/page.js
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Mic } from "lucide-react";
@@ -58,24 +58,23 @@ function getAudioExtension(mimeType) {
   return "webm";
 }
 
-export default function InterviewPrototypePage() {
+function InterviewPrototypePage({ queryResumeId }) {
   const { user, isLoading } = useAuth();
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const queryResumeId = searchParams.get("resumeId") || "";
   const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const discardRecordingRef = useRef(false);
   const countdownTimerRef = useRef(null);
   const audioRef = useRef(null);
-  const audioUrlRef = useRef(null);
+  const pendingRecordingRef = useRef(null);
   const currentQuestionRef = useRef(null);
   const audioContextRef = useRef(null);
   const audioMeterFrameRef = useRef(null);
   const audioMeterBarsRef = useRef([]);
 
   const [resumeId, setResumeId] = useState(() => {
+    if (queryResumeId) return queryResumeId;
     if (typeof window === "undefined") return "";
     try {
       return window.localStorage.getItem(RESUME_STORAGE_KEY) || "";
@@ -86,7 +85,6 @@ export default function InterviewPrototypePage() {
   });
   useEffect(() => {
     if (!queryResumeId) return;
-    setResumeId(queryResumeId);
     try {
       window.localStorage.setItem(RESUME_STORAGE_KEY, queryResumeId);
     } catch (storageError) {
@@ -206,16 +204,14 @@ export default function InterviewPrototypePage() {
     if (audioRef.current) {
       audioRef.current.pause();
     }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-    }
+    pendingRecordingRef.current = null;
   }, []);
 
-  // Auto-play audio or start reading countdown when question arrives
+// Auto-play audio or start reading countdown when question arrives
   useEffect(() => {
     if (phase !== "question_ready" || !question) return;
 
-    if (autoSpeak && question.audio_url) {
+    if (autoSpeak && question.audio_data_url) {
       playQuestionAudio();
     } else {
       if (question.kind === "conclusion") {
@@ -394,37 +390,28 @@ export default function InterviewPrototypePage() {
     }
   }
 
-  async function playQuestionAudio() {
-    if (!question?.audio_url) {
+async function playQuestionAudio() {
+    if (!question?.audio_data_url) {
       startThinkingCountdown(10);
       return;
     }
 
     setError("");
-    setPhase("loading_audio");
 
     try {
-      const response = await fetch(new URL(question.audio_url, API_URL), {
-        credentials: "include",
-      });
-      if (!response.ok) {
-        throw new Error("Unable to load question audio.");
+      if (audioRef.current) {
+        audioRef.current.pause();
       }
-
-      const audioBlob = await response.blob();
-      if (audioUrlRef.current) {
-        URL.revokeObjectURL(audioUrlRef.current);
-      }
-      audioUrlRef.current = URL.createObjectURL(audioBlob);
-      audioRef.current = new Audio(audioUrlRef.current);
-      audioRef.current.onended = () => {
+      const audio = new Audio(question.audio_data_url);
+      audioRef.current = audio;
+      audio.onended = () => {
         if (question.kind === "conclusion") {
           completeInterviewAfterConclusion();
         } else {
           startThinkingCountdown(5);
         }
       };
-      await audioRef.current.play();
+      await audio.play();
       setPhase("playing");
     } catch (playError) {
       setError(playError.message || "Unable to play question audio.");
@@ -462,10 +449,10 @@ export default function InterviewPrototypePage() {
 
     try {
       const mimeType = getRecordingMimeType();
-      const recorder = new MediaRecorder(
-        stream,
-        mimeType ? { mimeType } : undefined
-      );
+      const recorderOptions = mimeType
+        ? { mimeType, audioBitsPerSecond: 32000 }
+        : { audioBitsPerSecond: 32000 };
+      const recorder = new MediaRecorder(stream, recorderOptions);
       recordingChunksRef.current = [];
       discardRecordingRef.current = false;
       mediaRecorderRef.current = recorder;
@@ -503,7 +490,7 @@ export default function InterviewPrototypePage() {
     stopAudioMeter();
   }
 
-  async function submitAnswerRecording(recording, mimeType) {
+async function submitAnswerRecording(recording, mimeType) {
     const currentQuestion = currentQuestionRef.current;
     if (!interview || !currentQuestion) {
       setError("The current interview question is missing.");
@@ -511,8 +498,10 @@ export default function InterviewPrototypePage() {
       return;
     }
 
+    pendingRecordingRef.current = { blob: recording, mimeType };
     setPhase("uploading");
     setError("");
+
     const formData = new FormData();
     formData.append(
       "file",
@@ -530,6 +519,7 @@ export default function InterviewPrototypePage() {
         }
       );
       const data = await readResponse(response);
+      pendingRecordingRef.current = null;
       setLatestTranscript(data.transcript || "");
       showNextInterviewTurn(
         updateInterviewProgress(
@@ -544,11 +534,16 @@ export default function InterviewPrototypePage() {
       setError(uploadError.message || "Unable to submit the recording.");
 
       if (detail?.answer_id && detail.retryable) {
+        // STT succeeded and transcript is saved in DB; retry evaluation only.
+        pendingRecordingRef.current = null;
         setRetry({
           answerId: detail.answer_id,
-          action: detail.message?.includes("transcribe")
-            ? "retry-transcription"
-            : "retry-evaluation",
+          action: "retry-evaluation",
+        });
+      } else if (pendingRecordingRef.current) {
+        // Network or STT error before DB persistence; retry from in-memory Blob.
+        setRetry({
+          action: "retry-upload",
         });
       }
       setPhase("error");
@@ -558,12 +553,23 @@ export default function InterviewPrototypePage() {
   async function retryAnswerProcessing() {
     if (!retry || !interview) return;
 
+    if (retry.action === "retry-upload") {
+      const saved = pendingRecordingRef.current;
+      if (!saved) {
+        setRetry(null);
+        setError("Recorded audio is no longer available. Please start over.");
+        return;
+      }
+      await submitAnswerRecording(saved.blob, saved.mimeType);
+      return;
+    }
+
     setPhase("processing");
     setError("");
 
     try {
       const response = await fetch(
-        `${API_URL}/api/interviews/${interview.id}/answers/${retry.answerId}/${retry.action}`,
+        `${API_URL}/api/interviews/${interview.id}/answers/${retry.answerId}/${retry.action}?auto_speak=${autoSpeak}`,
         { method: "POST", credentials: "include" }
       );
       const data = await readResponse(response);
@@ -608,6 +614,7 @@ export default function InterviewPrototypePage() {
     setFeedback(null);
     setLatestTranscript("");
     setRetry(null);
+    pendingRecordingRef.current = null;
     setPhase("ready");
     setError("");
   }
@@ -790,5 +797,26 @@ export default function InterviewPrototypePage() {
         )}
       </section>
     </main>
+  );
+}
+
+function InterviewPageWithSearchParams() {
+  const searchParams = useSearchParams();
+  const queryResumeId = searchParams.get("resumeId") || "";
+
+  return <InterviewPrototypePage queryResumeId={queryResumeId} />;
+}
+
+export default function InterviewPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="flex flex-1 items-center justify-center px-[var(--page-gutter)]">
+          <p className="text-sm text-muted">Loading your interview...</p>
+        </main>
+      }
+    >
+      <InterviewPageWithSearchParams />
+    </Suspense>
   );
 }

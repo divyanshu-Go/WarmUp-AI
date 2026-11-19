@@ -1,29 +1,32 @@
-# backend/app/api/routes/auth.py
 import hashlib
 import hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from google.auth.transport.requests import Request as GoogleRequest
+from google.oauth2 import id_token
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.api.dependencies import get_current_user
 from app.core.config import settings
 from app.db.session import get_db
 from app.models.email_otp import EmailOTP
-from app.schemas.auth import GoogleAuthRequest, SendOTPRequest, SendOTPResponse, VerifyOTPRequest, AuthResponse, UserResponse
-from app.services.email_service import send_otp_email
-from app.api.dependencies import get_current_user
-
 from app.models.user import User
-from app.models.user_session import UserSession
+from app.schemas.auth import (
+    AuthResponse,
+    GoogleAuthRequest,
+    SendOTPRequest,
+    SendOTPResponse,
+    UserResponse,
+    VerifyOTPRequest,
+)
+from app.services.email_service import send_otp_email
 from app.services.session_service import (
     create_session,
-    get_active_session,
     revoke_session,
 )
-from google.auth.transport.requests import Request as GoogleRequest
-from google.oauth2 import id_token
 
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -39,6 +42,25 @@ def hash_otp(email: str, otp: str) -> str:
         value,
         hashlib.sha256,
     ).hexdigest()
+
+
+def _cookie_security_kwargs() -> dict:
+    is_https = settings.is_https_frontend
+    return {
+        "httponly": True,
+        "secure": is_https,
+        "samesite": "none" if is_https else "lax",
+        "path": "/",
+    }
+
+
+def set_session_cookie(response: Response, token: str):
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        max_age=settings.session_expiry_days * 86400,
+        **_cookie_security_kwargs(),
+    )
 
 
 @router.post("/send-otp", response_model=SendOTPResponse, status_code=202)
@@ -87,19 +109,6 @@ def send_otp(
     return SendOTPResponse(
         message="If the address can be verified, a code has been sent.",
         expires_in_seconds=OTP_EXPIRY_MINUTES * 60,
-    )
-
-
-
-def set_session_cookie(response: Response, token: str):
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=token,
-        httponly=True,
-        secure=False,  # Local development only
-        samesite="lax",
-        max_age=settings.session_expiry_days * 86400,
-        path="/",
     )
 
 
@@ -152,7 +161,7 @@ def verify_otp(
     elif user.email_verified_at is None:
         user.email_verified_at = now
 
-    token, session = create_session(db, user.id)
+    token, _ = create_session(db, user.id)
 
     # Commit OTP consumption, user creation and session together.
     db.commit()
@@ -193,14 +202,10 @@ def logout(
 
     response.delete_cookie(
         key=SESSION_COOKIE,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        path="/",
+        **_cookie_security_kwargs(),
     )
 
     return {"message": "Logged out successfully."}
-
 
 
 @router.post("/google", response_model=AuthResponse)
