@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 function rememberResumeId(resumeId) {
   try {

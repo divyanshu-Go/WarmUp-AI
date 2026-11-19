@@ -14,7 +14,7 @@ import RecordingControlBar from "./_components/RecordingControlBar";
 import TranscriptDrawer from "./_components/TranscriptDrawer";
 import FeedbackReport from "./_components/FeedbackReport";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const RESUME_STORAGE_KEY = "warmup_resume_id";
 const ACTIVE_INTERVIEW_STORAGE_KEY = "warmup_active_interview_id";
 
@@ -343,11 +343,6 @@ function InterviewPrototypePage({ queryResumeId }) {
 
     if (!resumeId.trim()) {
       setError("Enter a resume ID, or upload a resume first.");
-      return;
-    }
-
-    if (!API_URL) {
-      setError("The backend URL is not configured.");
       return;
     }
 
