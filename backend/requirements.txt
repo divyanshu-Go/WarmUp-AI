@@ -4,7 +4,6 @@ sqlalchemy
 alembic
 psycopg[binary]
 pydantic-settings
-chromadb
 email-validator
 google-auth[requests]
 python-multipart
